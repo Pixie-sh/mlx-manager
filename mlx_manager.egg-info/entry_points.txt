@@ -1,0 +1,2 @@
+[console_scripts]
+mlx-manager = mlx_manager.cli:main
