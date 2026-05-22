@@ -41,6 +41,52 @@ def _eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+def _vprint(msg: str, verbose: bool = False) -> None:
+    """Print to stderr only when *verbose* is enabled."""
+    if verbose:
+        _eprint(f"verbose: {msg}")
+
+
+def _human_size(n: int) -> str:
+    """Format a byte count as a human-readable string."""
+    if n < 1000:
+        return f"{n}B"
+    elif n < 1000**2:
+        return f"{n/1000:.0f}KB"
+    elif n < 1000**3:
+        return f"{n/1000**2:.1f}MB"
+    elif n < 1000**4:
+        return f"{n/1000**3:.1f}GB"
+    return f"{n/1000**4:.1f}TB"
+
+
+def _lan_ip() -> str | None:
+    """Return this machine's LAN IP address, or None if unavailable.
+
+    Uses a non-blocking socket connection to detect the outgoing interface.
+    Falls back to ``socket.gethostbyname(socket.gethostname())``.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setblocking(False)
+        # Connect to a non-routable address to discover the local interface.
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        # Skip loopback.
+        if ip != "127.0.0.1":
+            return ip
+    except OSError:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip != "127.0.0.1":
+            return ip
+    except OSError:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -72,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KEY=VAL",
-        help="forward extra flag to mlx_lm.server (repeatable)",
+        help="forward extra flag to mlx_lm server (repeatable)",
     )
 
     sp = sub.add_parser("stop", help="stop the managed server")
@@ -85,12 +131,29 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--bind-all", action="store_true")
     sp.add_argument("--extra-arg", action="append", default=[], metavar="KEY=VAL")
 
+    sp = sub.add_parser("switch", help="swap running server to a different model")
+    sp.add_argument("model", help="new model id, alias, or absolute path")
+    sp.add_argument("--host", help="override server host")
+    sp.add_argument("--port", type=int, help="override server port")
+    sp.add_argument("--bind-all", action="store_true", help="bind on 0.0.0.0 (insecure)")
+    sp.add_argument(
+        "--extra-arg",
+        action="append",
+        default=[],
+        metavar="KEY=VAL",
+        help="forward extra flag to mlx_lm server (repeatable)",
+    )
+
     sp = sub.add_parser("status", help="report server state")
     sp.add_argument("--json", action="store_true", dest="as_json")
 
     sp = sub.add_parser("logs", help="tail server log")
     sp.add_argument("--tail", type=int, default=100)
     sp.add_argument("-f", "--follow", action="store_true")
+
+    sp = sub.add_parser("info", help="show model metadata (weights, config.json)")
+    sp.add_argument("model", help="model id, alias, or absolute path")
+    sp.add_argument("--json", action="store_true", dest="as_json")
 
     cfg_sp = sub.add_parser("config", help="config & provider snippet helpers")
     cfg_sub = cfg_sp.add_subparsers(dest="config_cmd", metavar="<subcommand>")
@@ -114,9 +177,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="replace the entire provider block instead of merging (only used with --apply)",
     )
+    oc.add_argument(
+        "--remote",
+        action="store_true",
+        help="use LAN IP instead of localhost in emitted config (for remote clients)",
+    )
 
     cc = cfg_sub.add_parser("claude-code", help="emit Claude Code / LiteLLM snippet")
     cc.add_argument("--model")
+    cc.add_argument(
+        "--remote",
+        action="store_true",
+        help="use LAN IP instead of localhost in emitted config (for remote clients)",
+    )
+
+    ss = cfg_sub.add_parser("show", help="display current effective config values")
+    ss.add_argument("--json", action="store_true", dest="as_json")
+
+    ed = cfg_sub.add_parser("edit", help="open config.toml in $EDITOR")
+    ed.add_argument(
+        "--editor",
+        help="editor command (default: $EDITOR env var, fallback: vim)",
+    )
 
     sp = sub.add_parser("doctor", help="run diagnostics")
     sp.add_argument("--json", action="store_true", dest="as_json")
@@ -150,6 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--json", action="store_true", dest="as_json", help="emit results as JSON"
     )
+    sp.add_argument(
+        "--save",
+        metavar="FILE",
+        help="save benchmark results to FILE (JSON)",
+    )
 
     return p
 
@@ -167,15 +254,37 @@ def _cmd_list(cfg: Config, args: argparse.Namespace) -> int:
     if not models:
         print("(no models discovered — check [models].directories or add aliases)")
         return EXIT_OK
-    width = max((len(m.id) for m in models), default=8)
-    width = min(max(width, 8), 40)
-    print(f"{'ALIAS':<{width}}  PATH")
+
+    def _weight_count(p: Path) -> int:
+        n = int((p / "model.safetensors").is_file()) + int((p / "weights.safetensors").is_file())
+        n += sum(1 for c in p.iterdir() if c.is_file() and c.name.startswith("model-") and c.name.endswith(".safetensors"))
+        return n
+
+    def _dir_size(p: Path) -> str:
+        try:
+            sz = sum(c.stat().st_size for c in p.rglob("*") if c.is_file())
+        except OSError:
+            return "?"
+        if sz < 1000:
+            return f"{sz}B"
+        elif sz < 1000**2:
+            return f"{sz/1000:.0f}KB"
+        elif sz < 1000**3:
+            return f"{sz/1000**2:.1f}MB"
+        return f"{sz/1000**3:.1f}GB"
+
+    id_w = max((len(m.id) for m in models), default=8)
+    id_w = min(max(id_w, 8), 40)
+    print(f"{'ID':<{id_w}}  SOURCE    WEIGHTS  SIZE   PATH")
     for m in models:
-        if len(m.id) <= width:
-            print(f"{m.id:<{width}}  {m.path}")
+        wc = _weight_count(m.path)
+        sz = _dir_size(m.path)
+        line = f"{m.source:<9} {wc:<7} {sz:<6}  {m.path}"
+        if len(m.id) <= id_w:
+            print(f"{m.id:<{id_w}}  {line}")
         else:
-            print(m.id)
-            print(f"{'':<{width}}  {m.path}")
+            print(f"{m.id}")
+            print(f"{'':<{id_w}}  {line}")
     return EXIT_OK
 
 
@@ -206,6 +315,7 @@ def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
 
     try:
         with srv.acquire_lock(expand(cfg.server.lock_file)):
+            _vprint("lock acquired", args.verbose)
             state = srv.start(
                 cfg,
                 model,
@@ -214,12 +324,14 @@ def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
                 extra_arg_pairs=args.extra_arg,
                 replace=args.replace,
                 on_warning=lambda w: _eprint(f"warning: {w}"),
+                on_verbose=(lambda m: _eprint(f"verbose: {m}") if args.verbose else None),
             )
+            _vprint("lock released", args.verbose)
     except srv.ServerError as e:
         _eprint(f"error: {e}")
         return e.exit_code
 
-    print(f"started mlx_lm.server")
+    print(f"started mlx_lm server")
     print(f"  pid:        {state.pid}")
     print(f"  model:      {state.model_alias}")
     print(f"  path:       {state.model_path}")
@@ -231,11 +343,14 @@ def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_stop(cfg: Config, args: argparse.Namespace) -> int:
     try:
         with srv.acquire_lock(expand(cfg.server.lock_file)):
+            _vprint("lock acquired", args.verbose)
             state = srv.stop(cfg, timeout=args.timeout)
+            _vprint("lock released", args.verbose)
     except srv.ServerError as e:
         _eprint(f"error: {e}")
         return e.exit_code
     print(f"stopped pid {state.pid} ({state.model_alias})")
+    _vprint(f"state_file removed: {expand(cfg.server.state_file)}", args.verbose)
     return EXIT_OK
 
 
@@ -248,6 +363,21 @@ def _cmd_restart(cfg: Config, args: argparse.Namespace) -> int:
         replace=True,
         bind_all=args.bind_all,
         extra_arg=args.extra_arg,
+        verbose=getattr(args, "verbose", False),
+    )
+    return _cmd_start(cfg, start_args)
+
+
+def _cmd_switch(cfg: Config, args: argparse.Namespace) -> int:
+    """Swap running server to a different model (convenience alias for restart --replace)."""
+    start_args = argparse.Namespace(
+        model=args.model,
+        host=args.host or cfg.server.host,
+        port=args.port or cfg.server.port,
+        replace=True,
+        bind_all=args.bind_all,
+        extra_arg=args.extra_arg,
+        verbose=args.verbose,
     )
     return _cmd_start(cfg, start_args)
 
@@ -272,7 +402,34 @@ def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
     print(f"            port      {d['port']}")
     print(f"            base_url  {d['base_url']}")
     print(f"            started   {d['started_at']}")
-    print(f"            uptime    {d['uptime_seconds']}s")
+
+    uptime_s = d["uptime_seconds"]
+    if uptime_s >= 86400:
+        uptime_human = f"{uptime_s//86400}d {(uptime_s%86400)//3600}h {(uptime_s%3600)//60}m"
+    elif uptime_s >= 3600:
+        uptime_human = f"{uptime_s//3600}h {(uptime_s%3600)//60}m"
+    elif uptime_s >= 60:
+        uptime_human = f"{uptime_s//60}m {uptime_s%60}s"
+    else:
+        uptime_human = f"{uptime_s}s"
+    print(f"            uptime    {uptime_human} ({uptime_s}s)")
+
+    if d.get("mlx_lm_version"):
+        print(f"            mlx_lm    {d['mlx_lm_version']}")
+
+    # Memory usage from ps.
+    try:
+        ps_out = subprocess.run(
+            ["ps", "-p", str(d["pid"]), "-o", "rss="],
+            capture_output=True, text=True, timeout=5,
+        )
+        if ps_out.returncode == 0:
+            rss = int(ps_out.stdout.strip())
+            rss_mb = rss / 1024 / 1024
+            print(f"            memory    {rss_mb:.0f}MB (rss)")
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        pass
+
     print(f"            endpoint  {'ok' if d['endpoint_ok'] else 'unreachable'}")
     return EXIT_OK
 
@@ -321,16 +478,32 @@ def _pick_provider_model(cfg: Config, requested: str | None) -> str | None:
     return None
 
 
-def _provider_context(cfg: Config, model_id: str) -> ProviderContext:
+def _provider_context(cfg: Config, model_id: str, *, remote: bool = False) -> ProviderContext:
     state = srv.read_state(expand(cfg.server.state_file))
     if state is not None and srv.is_managed_process(state.pid, state):
         base_url = state.base_url
     else:
         base_url = cfg.base_url
+    # When --remote is given, swap localhost/wildcard for the LAN IP so the
+    # config works for clients on the same network that can't reach 127.0.0.1.
+    if remote and base_url.startswith("http://127.0.0.1"):
+        lan = _lan_ip()
+        if lan:
+            base_url = base_url.replace("http://127.0.0.1", f"http://{lan}", 1)
+    elif remote and base_url.startswith("http://0.0.0.0"):
+        lan = _lan_ip()
+        if lan:
+            base_url = base_url.replace("http://0.0.0.0", f"http://{lan}", 1)
+    # When --remote is given, append the hostname to the provider name so
+    # remote clients can distinguish this provider from others on the network.
+    provider_name = cfg.providers.provider_name
+    if remote:
+        hostname = socket.gethostname()
+        provider_name = f"{provider_name}@{hostname}"
     return ProviderContext(
         base_url=base_url,
         api_key=cfg.providers.api_key,
-        provider_name=cfg.providers.provider_name,
+        provider_name=provider_name,
         model_id=model_id,
     )
 
@@ -340,7 +513,10 @@ def _cmd_config_opencode(cfg: Config, args: argparse.Namespace) -> int:
     if not model_id:
         _eprint("error: no model available; pass --model or run `mlx-manager list`")
         return EXIT_CONFIG
-    ctx = _provider_context(cfg, model_id)
+    remote = getattr(args, "remote", False)
+    ctx = _provider_context(cfg, model_id, remote=remote)
+    if remote:
+        _vprint(f"remote mode: using LAN IP in config", args.verbose)
     if args.apply:
         target = expand(args.target)
         try:
@@ -359,9 +535,100 @@ def _cmd_config_claude_code(cfg: Config, args: argparse.Namespace) -> int:
     if not model_id:
         _eprint("error: no model available; pass --model or run `mlx-manager list`")
         return EXIT_CONFIG
-    ctx = _provider_context(cfg, model_id)
+    remote = getattr(args, "remote", False)
+    ctx = _provider_context(cfg, model_id, remote=remote)
+    if remote:
+        _vprint(f"remote mode: using LAN IP in config", args.verbose)
     sys.stdout.write(claude_code_snippet(ctx))
     return EXIT_OK
+
+
+def _cmd_config_show(cfg: Config, args: argparse.Namespace) -> int:
+    """Display current effective config values."""
+    if args.as_json:
+        out: dict[str, Any] = {
+            "path": str(cfg.path),
+            "server": cfg.server.to_dict() if hasattr(cfg.server, "to_dict") else {
+                "host": cfg.server.host,
+                "port": cfg.server.port,
+                "log_file": cfg.server.log_file,
+                "pid_file": cfg.server.pid_file,
+                "state_file": cfg.server.state_file,
+                "lock_file": cfg.server.lock_file,
+                "python_executable": cfg.server.python_executable,
+                "extra_args": cfg.server.extra_args,
+                "startup_timeout_seconds": cfg.server.startup_timeout_seconds,
+                "stop_timeout_seconds": cfg.server.stop_timeout_seconds,
+                "max_log_bytes": cfg.server.max_log_bytes,
+                "max_log_files": cfg.server.max_log_files,
+            },
+            "models": {
+                "directories": cfg.models.directories,
+                "default_model": cfg.models.default_model,
+                "aliases": cfg.models.aliases,
+            },
+            "providers": {
+                "base_url": cfg.providers.base_url,
+                "api_key": cfg.providers.api_key,
+                "provider_name": cfg.providers.provider_name,
+            },
+        }
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"config file: {cfg.path}")
+        print()
+        print("[server]")
+        print(f"  host                      = {cfg.server.host}")
+        print(f"  port                      = {cfg.server.port}")
+        print(f"  log_file                  = {cfg.server.log_file}")
+        print(f"  pid_file                  = {cfg.server.pid_file}")
+        print(f"  state_file                = {cfg.server.state_file}")
+        print(f"  lock_file                 = {cfg.server.lock_file}")
+        print(f"  python_executable         = {cfg.server.python_executable}")
+        print(f"  extra_args                = {cfg.server.extra_args}")
+        print(f"  startup_timeout_seconds   = {cfg.server.startup_timeout_seconds}")
+        print(f"  stop_timeout_seconds      = {cfg.server.stop_timeout_seconds}")
+        print(f"  max_log_bytes             = {cfg.server.max_log_bytes}")
+        print(f"  max_log_files             = {cfg.server.max_log_files}")
+        print()
+        print("[models]")
+        print(f"  directories               = {cfg.models.directories}")
+        print(f"  default_model             = {cfg.models.default_model!r}")
+        if cfg.models.aliases:
+            print(f"  aliases:")
+            for k, v in cfg.models.aliases.items():
+                print(f"    {k} = {v}")
+        print()
+        print("[providers]")
+        print(f"  base_url                  = {cfg.providers.base_url!r}")
+        print(f"  api_key                   = {cfg.providers.api_key}")
+        print(f"  provider_name             = {cfg.providers.provider_name}")
+    return EXIT_OK
+
+
+def _cmd_config_edit(cfg: Config, args: argparse.Namespace) -> int:
+    """Open config.toml in $EDITOR."""
+    editor = args.editor or os.environ.get("EDITOR", "vim")
+    cfg_path = expand(cfg.path)
+    if not cfg_path.exists():
+        _eprint(f"error: config file {cfg_path} does not exist")
+        return EXIT_CONFIG
+    _vprint(f"opening {cfg_path} in {editor}", args.verbose)
+    try:
+        rc = subprocess.call([editor, str(cfg_path)])
+    except FileNotFoundError:
+        _eprint(f"error: editor {editor!r} not found on PATH")
+        return EXIT_GENERIC
+    if rc != 0:
+        _eprint(f"warning: editor exited with code {rc}")
+    # Reload config after editing.
+    try:
+        new_cfg = load(cfg.path)
+        print(f"config reloaded from {new_cfg.path}")
+        return EXIT_OK
+    except (ConfigError, OSError) as e:
+        _eprint(f"error: config is invalid after editing: {e}")
+        return EXIT_CONFIG
 
 
 # ---------------------------------------------------------------------------
@@ -394,16 +661,16 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
         add("mlx_lm import", "OK", f"version {v}")
         flags = srv.supported_server_flags(py)
         if flags:
-            add("mlx_lm.server --help", "OK", f"{len(flags)} flags parsed")
+            add("mlx_lm server --help", "OK", f"{len(flags)} flags parsed")
         else:
-            add("mlx_lm.server --help", "WARN", "could not parse --help output")
+            add("mlx_lm server --help", "WARN", "could not parse --help output")
     else:
         add(
             "mlx_lm import",
             "FAIL",
             "`import mlx_lm` failed; install with `pip install mlx-lm`",
         )
-        add("mlx_lm.server --help", "WARN", "skipped (mlx_lm missing)")
+        add("mlx_lm server --help", "WARN", "skipped (mlx_lm missing)")
 
     for raw_dir in cfg.models.directories:
         d = expand(raw_dir)
@@ -470,7 +737,93 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
             f"expected Darwin/arm64, got {platform.system()}/{platform.machine()}",
         )
 
+    # System memory.
+    try:
+        mem_out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
+        if mem_out.returncode == 0:
+            mem_bytes = int(mem_out.stdout.strip())
+            mem_gb = mem_bytes / 1024 / 1024 / 1024
+            add("memory", "OK", f"{mem_gb:.0f}GB physical")
+        else:
+            add("memory", "WARN", "could not determine physical memory")
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        add("memory", "WARN", "sysctl hw.memsize unavailable")
+
+    # Firewall status (macOS pf).
+    try:
+        fw_out = subprocess.run(["pfctl", "--status"], capture_output=True, text=True, timeout=5)
+        if "is enabled" in (fw_out.stdout or fw_out.stderr or ""):
+            add("firewall", "WARN", "pf is enabled (may block inbound connections)")
+        else:
+            add("firewall", "OK", "pf is disabled")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        add("firewall", "WARN", "could not determine pf status")
+
     return results
+
+
+def _cmd_info(cfg: Config, args: argparse.Namespace) -> int:
+    """Show model metadata: id, source, path, weights, config.json fields."""
+    rc, m_or_err = _resolve_model_for_action(cfg, args.model)
+    if rc != EXIT_OK:
+        _eprint(f"error: {m_or_err}")
+        return rc
+    m = m_or_err  # type: ignore[attribute-error]
+
+    # Count weight files and total size.
+    weight_files = []
+    total_size = 0
+    try:
+        for c in m.path.iterdir():
+            if c.is_file() and (
+                c.name == "model.safetensors"
+                or c.name == "weights.safetensors"
+                or (c.name.startswith("model-") and c.name.endswith(".safetensors"))
+            ):
+                st = c.stat()
+                weight_files.append(c.name)
+                total_size += st.st_size
+    except OSError:
+        pass
+
+    # Read config.json if present.
+    cfg_json: dict[str, Any] = {}
+    cfg_path = m.path / "config.json"
+    if cfg_path.is_file():
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg_json = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if args.as_json:
+        out = {
+            "id": m.id,
+            "source": m.source,
+            "path": str(m.path),
+            "weight_files": weight_files,
+            "weight_count": len(weight_files),
+            "total_size": total_size,
+            "config": cfg_json,
+        }
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"id          {m.id}")
+        print(f"source      {m.source}")
+        print(f"path        {m.path}")
+        print(f"weights     {len(weight_files)} file(s), {_human_size(total_size)}")
+        if weight_files:
+            for wf in weight_files:
+                wp = m.path / wf
+                print(f"           {wf} ({_human_size(wp.stat().st_size) if wp.is_file() else '?'})")
+        if cfg_json:
+            print(f"config.json:")
+            for k in ("model_type", "num_parameters", "num_hidden_layers",
+                       "hidden_size", "num_attention_heads", "tokenizer_class"):
+                if k in cfg_json:
+                    print(f"           {k} = {cfg_json[k]}")
+
+    return EXIT_OK
 
 
 def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
@@ -527,6 +880,40 @@ def _cmd_benchmark(cfg: Config, args: argparse.Namespace) -> int:
     else:
         prompt = args.prompt or bench.DEFAULT_PROMPT
 
+    # Collect results as they complete so the on_event callback can format them.
+    _results: list[bench.RequestResult] = []
+
+    # Progress tracker for concurrent runs.
+    completed_count = 0
+
+    def _progress(done: int, total: int) -> None:
+        nonlocal completed_count
+        completed_count = done
+        if not args.as_json:
+            bar_len = min(total, 20)
+            filled = int(done / total * bar_len)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            sys.stdout.write(f"\r  [{bar}] {done}/{total} done   ")
+            sys.stdout.flush()
+
+    def _on_event(msg: str) -> None:
+        if not args.as_json:
+            # Warmup messages pass through as simple text.
+            if msg.startswith("warmup"):
+                print(f"  {msg}")
+                return
+            # Measured requests get table-formatted output with bars.
+            if not _results:
+                print(f"\n  {'#':<3} {'TTFT':<8} {'Total':<8} {'Tokens':<8} {'Decode':<12} {'Bar'}")
+            ttft_str = "-" if _results[-1].ttft_s is None else f"{_results[-1].ttft_s:.2f}s"
+            total_str = f"{_results[-1].total_s:.2f}s"
+            tok_str = str(_results[-1].completion_tokens)
+            tps_str = f"{_results[-1].decode_tps:.1f} tok/s"
+            max_tps = max((r.decode_tps for r in _results if r.decode_tps > 0), default=1)
+            bar = bench._ascii_bar(_results[-1].decode_tps, max_tps, 16) if _results[-1].decode_tps > 0 else ""
+            err_str = f" ERR {_results[-1].error}" if not _results[-1].ok else ""
+            print(f"  {_results[-1].finish_reason:<3} {ttft_str:<8} {total_str:<8} {tok_str:<8} {tps_str:<12} {bar}{err_str}")
+
     if not args.as_json:
         print(f"benchmark   endpoint    {endpoint}")
         print(f"            model       {model_id}")
@@ -546,34 +933,67 @@ def _cmd_benchmark(cfg: Config, args: argparse.Namespace) -> int:
             max_tokens=args.max_tokens,
             warmup=args.warmup,
             api_key=cfg.providers.api_key,
-            on_event=(None if args.as_json else lambda m: print(f"  {m}")),
+            on_event=(None if args.as_json else _on_event),
+            on_progress=(None if args.as_json else _progress),
+            results=_results,
         )
     except ValueError as e:
         _eprint(f"error: {e}")
         return EXIT_USAGE
 
+    # Save results if requested.
+    if args.save:
+        save_path = expand(args.save)
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(summary.to_dict(), f, indent=2)
+            _vprint(f"results saved to {save_path}", args.verbose)
+        except OSError as e:
+            _eprint(f"warning: could not save to {save_path}: {e}")
+
     if args.as_json:
         print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
         return EXIT_OK if summary.requests_ok > 0 else EXIT_GENERIC
 
+    # Visual summary output.
+    if not args.as_json:
+        print()
+
+    # Sort per-request results by total time for display.
+    sorted_results = sorted(summary.per_request, key=lambda r: r.total_s)
+
     print("")
-    print(f"summary     wall              {summary.wall_seconds:.2f}s")
-    print(
-        f"            requests          {summary.requests_ok}/{summary.requests_total} ok"
-    )
+    print("─── Summary ──────────────────────────────────────────────────────")
+    print(f"  wall time:        {summary.wall_seconds:.2f}s")
+    print(f"  requests:         {summary.requests_ok}/{summary.requests_total} succeeded")
     if summary.ttft_p50 is not None:
-        print(f"            ttft p50/p95      {summary.ttft_p50:.2f}s / {summary.ttft_p95:.2f}s")
+        ttft_bar = bench._ascii_bar(summary.ttft_p50, max(summary.ttft_p95 or summary.ttft_p50, 0.01), 16)
+        print(f"  ttft:             p50={summary.ttft_p50:.2f}s  p95={summary.ttft_p95:.2f}s  {ttft_bar}")
     if summary.decode_tps_p50 is not None:
-        print(
-            f"            decode p50/p95    "
-            f"{summary.decode_tps_p50:.1f} / {summary.decode_tps_p95:.1f} tok/s per stream"
-        )
+        max_decode = max(summary.decode_tps_p95 or summary.decode_tps_p50, 0.01)
+        decode_bar = bench._ascii_bar(summary.decode_tps_p50, max_decode, 16)
+        print(f"  decode rate:      p50={summary.decode_tps_p50:.1f} tok/s  p95={summary.decode_tps_p95:.1f} tok/s  {decode_bar} (per stream)")
     if summary.total_p50 is not None:
-        print(f"            total p50/p95     {summary.total_p50:.2f}s / {summary.total_p95:.2f}s")
-    print(
-        f"            aggregate         {summary.aggregate_decode_tps:.1f} tok/s "
-        f"(sum of all parallel streams)"
-    )
+        total_bar = bench._ascii_bar(summary.total_p50, max(summary.total_p95 or summary.total_p50, 0.01), 16)
+        print(f"  total time:       p50={summary.total_p50:.2f}s  p95={summary.total_p95:.2f}s  {total_bar}")
+
+    # Aggregate throughput with bar.
+    max_agg = max(summary.aggregate_decode_tps, 0.01)
+    agg_bar = bench._ascii_bar(summary.aggregate_decode_tps, max_agg * 2, 16)
+    print(f"  aggregate rate:   {summary.aggregate_decode_tps:.1f} tok/s  {agg_bar}")
+
+    # Parallelism analysis.
+    if summary.concurrency > 1 and summary.single_stream_tps is not None:
+        ratio = summary.parallelism_ratio
+        degradation = summary.degradation_pct
+        if ratio:
+            print(f"  parallelism gain: {ratio:.2f}×")
+        if degradation is not None:
+            sign = "+" if degradation < 0 else ""
+            print(f"  per-stream delta: {sign}{degradation:+.1f}% (vs single-stream)")
+
+    print("───")
     return EXIT_OK if summary.requests_ok > 0 else EXIT_GENERIC
 
 
@@ -582,8 +1002,10 @@ _HANDLERS = {
     "start": _cmd_start,
     "stop": _cmd_stop,
     "restart": _cmd_restart,
+    "switch": _cmd_switch,
     "status": _cmd_status,
     "logs": _cmd_logs,
+    "info": _cmd_info,
     "doctor": _cmd_doctor,
     "benchmark": _cmd_benchmark,
 }
@@ -602,11 +1024,17 @@ def main(argv: list[str] | None = None) -> int:
         _eprint(f"config error: {e}")
         return EXIT_CONFIG
 
+    _vprint(f"config loaded from {cfg.path}", args.verbose)
+
     if args.cmd == "config":
         if args.config_cmd == "opencode":
             return _cmd_config_opencode(cfg, args)
         if args.config_cmd == "claude-code":
             return _cmd_config_claude_code(cfg, args)
+        if args.config_cmd == "show":
+            return _cmd_config_show(cfg, args)
+        if args.config_cmd == "edit":
+            return _cmd_config_edit(cfg, args)
         parser.error(f"unknown config subcommand: {args.config_cmd!r}")
         return EXIT_USAGE
 

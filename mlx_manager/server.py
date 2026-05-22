@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import difflib
 import errno
 import fcntl
 import json
@@ -174,7 +175,7 @@ def is_managed_process(pid: int, state: State | None = None) -> bool:
     if not pid_alive(pid):
         return False
     cmd = pid_command(pid)
-    if "mlx_lm.server" not in cmd and "mlx_lm" not in cmd:
+    if "mlx_lm server" not in cmd and "mlx_lm.server" not in cmd and "mlx_lm" not in cmd:
         return False
     if state is not None:
         if str(state.port) not in cmd:
@@ -217,13 +218,13 @@ def port_listener_pid(port: int) -> int | None:
 
 
 def supported_server_flags(python_executable: str) -> set[str]:
-    """Run ``python -m mlx_lm.server --help`` and parse the long flags it accepts.
+    """Run ``python -m mlx_lm server --help`` and parse the long flags it accepts.
 
     Returns an empty set if mlx_lm isn't installed or help can't be parsed.
     """
     try:
         out = subprocess.run(
-            [python_executable, "-m", "mlx_lm.server", "--help"],
+            [python_executable, "-m", "mlx_lm", "server", "--help"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -329,12 +330,22 @@ def endpoint_ok(host: str, port: int) -> bool:
         return False
 
 
-def wait_ready(host: str, port: int, timeout: float) -> bool:
+def wait_ready(host: str, port: int, timeout: float, *, on_verbose=None) -> bool:
     deadline = time.monotonic() + timeout
+    t0 = time.monotonic()
+    attempt = 0
     while time.monotonic() < deadline:
+        attempt += 1
+        if on_verbose:
+            elapsed = time.monotonic() - t0
+            on_verbose(f"readiness probe attempt {attempt} ({host}:{port}, {elapsed:.1f}s)")
         if endpoint_ok(host, port):
+            if on_verbose:
+                on_verbose(f"server is ready ({time.monotonic() - t0:.1f}s)")
             return True
         time.sleep(READINESS_PROBE_INTERVAL_S)
+    if on_verbose:
+        on_verbose(f"server not ready after {attempt} attempts ({time.monotonic() - t0:.1f}s)")
     return False
 
 
@@ -369,7 +380,11 @@ def _normalize_extra_args(
         k, _, v = kv.partition("=")
         flag = k if k.startswith("--") else f"--{k.lstrip('-')}"
         if supported and flag not in supported:
-            warnings.append(f"flag {flag} not recognized by installed mlx_lm.server")
+            similar = difflib.get_close_matches(flag, supported, n=1, cutoff=0.6)
+            msg = f"flag {flag} not recognized by installed mlx_lm server"
+            if similar:
+                msg += f" (did you mean {similar[0]}?)"
+            warnings.append(msg)
         if flag in _BOOL_FLAGS:
             if v.lower() in ("1", "true", "yes", "y", "on"):
                 args.append(flag)
@@ -381,7 +396,7 @@ def _normalize_extra_args(
 
 
 def serving_invocation(model: Model) -> tuple[str, Path | None]:
-    """Return ``(--model arg, cwd)`` such that ``mlx_lm.server`` loads *model*
+    """Return ``(--model arg, cwd)`` such that ``mlx_lm server`` loads *model*
     and exposes it on the wire under the same string the client uses in the
     ``model`` JSON field.
 
@@ -405,12 +420,13 @@ def build_command(
     extra_arg_pairs: list[str],
     supported_flags: set[str],
 ) -> tuple[list[str], Path | None, list[str]]:
-    """Return ``(argv, cwd, warnings)`` for the mlx_lm.server invocation."""
+    """Return ``(argv, cwd, warnings)`` for the mlx_lm server invocation."""
     serving_id, cwd = serving_invocation(model)
     cmd = [
         cfg.server.python_executable,
         "-m",
-        "mlx_lm.server",
+        "mlx_lm",
+        "server",
         "--model",
         serving_id,
         "--host",
@@ -455,6 +471,7 @@ def start(
     extra_arg_pairs: list[str],
     replace: bool,
     on_warning=None,
+    on_verbose=None,
 ) -> State:
     """Start the server. Returns the live State or raises ServerError."""
     state_path = expand(cfg.server.state_file)
@@ -475,6 +492,10 @@ def start(
     if on_warning:
         for w in warnings:
             on_warning(w)
+    if on_verbose:
+        on_verbose(f"command: {' '.join(cmd)}")
+        if cwd:
+            on_verbose(f"cwd: {cwd}")
 
     existing = read_state(state_path)
     if existing is not None and is_managed_process(existing.pid, existing):
@@ -484,6 +505,8 @@ def start(
                 f"{existing.model_alias!r}); use --replace to swap",
                 exit_code=5,
             )
+        if on_verbose:
+            on_verbose(f"stopping existing server (pid {existing.pid})")
         # Stop existing before starting new.
         stop(cfg, timeout=cfg.server.stop_timeout_seconds)
 
@@ -513,6 +536,9 @@ def start(
     finally:
         log_fd.close()
 
+    if on_verbose:
+        on_verbose(f"spawned pid {proc.pid}")
+
     state = State(
         pid=proc.pid,
         model_alias=model.id,
@@ -528,7 +554,7 @@ def start(
     write_state(state_path, state)
     pid_path.write_text(f"{proc.pid}\n", encoding="utf-8")
 
-    if not wait_ready(host, port, cfg.server.startup_timeout_seconds):
+    if not wait_ready(host, port, cfg.server.startup_timeout_seconds, on_verbose=on_verbose):
         # Kill the failed child; surface tail of log.
         with contextlib.suppress(ProcessLookupError):
             os.kill(proc.pid, signal.SIGTERM)
@@ -559,7 +585,7 @@ def stop(cfg: Config, *, timeout: int | None = None) -> State:
     cmd = pid_command(state.pid)
     if "mlx_lm" not in cmd:
         raise ServerError(
-            f"pid {state.pid} is alive but does not look like mlx_lm.server "
+            f"pid {state.pid} is alive but does not look like mlx_lm server "
             f"(command: {cmd!r}); refusing to kill",
             exit_code=1,
         )

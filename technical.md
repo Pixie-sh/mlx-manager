@@ -15,8 +15,8 @@
 | License | MIT |
 | Author | rs |
 | Third-party deps | tomli-w only (TOML writing) |
-| Total source | ~1,959 lines across 8 modules |
-| Total tests | ~72 tests across 7 files |
+| Total source | ~2,250 lines across 9 modules |
+| Total tests | ~49 tests across 6 files |
 
 ### Design Philosophy
 
@@ -32,12 +32,12 @@
 
 | Module | Lines | Responsibility |
 |--------|-------|---------------|
-| `cli.py` | 621 | Main entry point, argparse dispatch, all command handlers |
+| `cli.py` | 786 | Main entry point, argparse dispatch, all command handlers |
 | `config.py` | 196 | TOML loading/writing, validation, defaults |
 | `models.py` | 149 | Model discovery (filesystem + HF cache + aliases) |
 | `paths.py` | 23 | Path expansion (~ and $VAR) |
 | `providers.py` | 177 | OpenCode/Claude Code/LiteLLM snippet generation |
-| `server.py` | 634 | Process lifecycle, PID management, locks, log rotation |
+| `server.py` | 655 | Process lifecycle, PID management, locks, log rotation |
 | `benchmark.py` | 259 | Performance measurement (TTFT, decode tok/s, throughput) |
 
 ### Data Flow
@@ -207,7 +207,7 @@ When `start --model X` is called, resolve `X` in this order:
    → If running and --replace: stop existing first
 3. Check port availability (socket bind test + lsof)
 4. Rotate log file if over max_log_bytes
-5. Build command: python -m mlx_lm.server --model <id> --host <h> --port <p> [+ extra args]
+5. Build command: python -m mlx_lm server --model <id> --host <h> --port <p> [+ extra args]
 6. Spawn via subprocess.Popen (detached with start_new_session=True)
 7. Write state.json atomically (write-tmp + rename)
 8. Write pid_file
@@ -223,7 +223,7 @@ When `start --model X` is called, resolve `X` in this order:
 1. Acquire fcntl exclusive lock
 2. Load state file
    → No state or dead PID: clean up files, exit 4
-3. Verify PID argv contains mlx_lm.server AND recorded port
+3. Verify PID argv contains mlx_lm AND recorded port
    → Mismatch: refuse to kill, exit 1
 4. Send SIGTERM, wait up to stop_timeout_seconds
 5. If still alive: send SIGKILL
@@ -237,6 +237,20 @@ When `start --model X` is called, resolve `X` in this order:
 - Uses stdlib `urllib.request` with 2s per-attempt timeout
 - Returns True on 2xx/3xx/4xx status codes
 
+
+### Serving Invocation (`serving_invocation()`)
+
+The `serving_invocation(model)` function in `server.py` determines how to pass the model to `mlx_lm server` so the HTTP API exposes the same id string that `mlx-manager list` shows and that clients use in the `model` JSON field.
+
+- **Filesystem models** (`directory`/`alias` source): passes the directory basename as `--model <basename>` and sets `cwd` to the parent directory. `Path(basename)` then resolves locally within that cwd, so `mlx_lm` loads the model without contacting HuggingFace — and the API id becomes the basename.
+- **HF-cache models** (`hf_cache` source): passes `<org>/<name>` directly as `--model <org>/<name>` with no cwd change. `mlx_lm`'s built-in HF resolver locates the snapshot in the local cache.
+
+This is the load-bearing detail that makes a bare `"GLM-4.7-Flash-MLX-6bit"` work as the model field in an OpenCode config, even though the actual model files live deep in `~/.lmstudio/models/publisher/GLM-4.7-Flash-MLX-6bit/`.
+
+### Module Invocation Form
+
+The server is spawned with `python -m mlx_lm server` (space-separated, not dotted `mlx_lm.server`). The dotted form is deprecated in newer mlx-lm releases. `is_managed_process()` checks for `mlx_lm server`, `mlx_lm.server`, or bare `mlx_lm` in the live argv to cover both forms during transition.
+
 ---
 
 ## 7. Safety Mechanisms
@@ -245,7 +259,7 @@ When `start --model X` is called, resolve `X` in this order:
 
 The system **never kills a PID without verifying**:
 1. PID is alive (`os.kill(pid, 0)`)
-2. PID's argv contains `mlx_lm.server` (via `ps -p <pid>`)
+2. PID's argv contains `mlx_lm` (via `ps -p <pid>`)
 3. PID's argv contains the recorded port number
 4. PID's argv contains the model alias/path/basename
 

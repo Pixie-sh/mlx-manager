@@ -25,6 +25,30 @@ DEFAULT_PROMPT = (
 REQUEST_READ_TIMEOUT_S = 600.0  # generous; slow models on long completions.
 
 
+def _ascii_bar(value: float, max_value: float, width: int = 20) -> str:
+    """Return an ASCII bar of *width* cells proportional to *value* / *max_value*.
+
+    Uses full/half/empty block characters for sub-cell resolution.
+    """
+    if max_value <= 0:
+        return " " * width
+    ratio = value / max_value
+    filled = ratio * width
+    int_filled = int(filled)
+    remainder = filled - int_filled
+
+    parts: list[str] = []
+    if int_filled > 0:
+        parts.append("█" * int_filled)
+    if remainder > 0.75:
+        parts.append("█")
+    elif remainder > 0.25:
+        parts.append("▓")
+    if int_filled + (1 if remainder > 0.25 else 0) < width:
+        parts.append("░" * (width - int_filled - (1 if remainder > 0.25 else 0)))
+    return "".join(parts)
+
+
 @dataclass
 class RequestResult:
     ok: bool
@@ -64,6 +88,31 @@ class BenchmarkSummary:
         d = asdict(self)
         d["per_request"] = [r.to_dict() for r in self.per_request]
         return d
+
+    @property
+    def single_stream_tps(self) -> float | None:
+        """Median per-stream decode rate (useful for parallelism comparison)."""
+        vals = [r.decode_tps for r in self.per_request if r.ok and r.decode_tps > 0]
+        if not vals:
+            return None
+        return statistics.median(vals) if len(vals) > 1 else vals[0]
+
+    @property
+    def parallelism_ratio(self) -> float | None:
+        """Ratio of aggregate throughput to single-stream median. >1 means parallelism helps."""
+        single = self.single_stream_tps
+        if single is None or single <= 0:
+            return None
+        return self.aggregate_decode_tps / single
+
+    @property
+    def degradation_pct(self) -> float | None:
+        """Per-stream degradation percentage when running concurrently. Negative = improvement."""
+        single = self.single_stream_tps
+        agg_per_stream = self.aggregate_decode_tps / max(self.concurrency, 1)
+        if single is None or single <= 0:
+            return None
+        return ((single - agg_per_stream) / single) * 100
 
 
 def _percentile(values: list[float], q: float) -> float | None:
@@ -183,8 +232,17 @@ def run(
     warmup: int = 0,
     api_key: str = "",
     on_event: Callable[[str], None] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    results: list[RequestResult] | None = None,
 ) -> BenchmarkSummary:
-    """Run *requests* total at *concurrency*, after *warmup* sequential calls."""
+    """Run *requests* total at *concurrency*, after *warmup* sequential calls.
+
+    *on_progress* is called with ``(completed, total)`` as each request finishes,
+    enabling a progress indicator in the caller.
+
+    If *results* is given, completed RequestResult objects are appended to it
+    as they finish, so the caller can inspect them before ``run()`` returns.
+    """
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
     if requests < 1:
@@ -203,7 +261,8 @@ def run(
             endpoint, model, prompt, max_tokens=max_tokens, api_key=api_key
         )
 
-    results: list[RequestResult] = []
+    internal_results: list[RequestResult] = results if results is not None else []
+    completed = 0
     t_start = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as ex:
         futures = [
@@ -219,7 +278,10 @@ def run(
         ]
         for i, fut in enumerate(concurrent.futures.as_completed(futures), start=1):
             r = fut.result()
-            results.append(r)
+            internal_results.append(r)
+            completed += 1
+            if on_progress:
+                on_progress(completed, requests)
             emit(
                 f"request {i}/{requests}  "
                 f"ttft={'-' if r.ttft_s is None else f'{r.ttft_s:.2f}s'}  "
@@ -230,7 +292,7 @@ def run(
             )
     wall = time.monotonic() - t_start
 
-    ok = [r for r in results if r.ok]
+    ok = [r for r in internal_results if r.ok]
     completion_total = sum(r.completion_tokens for r in ok)
     aggregate_tps = completion_total / wall if wall > 0 else 0.0
 
@@ -249,7 +311,7 @@ def run(
         prompt_chars=len(prompt),
         wall_seconds=wall,
         aggregate_decode_tps=aggregate_tps,
-        per_request=results,
+        per_request=internal_results,
         ttft_p50=_percentile(ttft_vals, 50),
         ttft_p95=_percentile(ttft_vals, 95),
         decode_tps_p50=_percentile(decode_vals, 50),
