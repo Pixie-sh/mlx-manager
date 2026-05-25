@@ -1,4 +1,0 @@
-tomli-w>=1.0
-
-[dev]
-pytest>=7

@@ -13,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Iterable
+from typing import Callable
 
 
 DEFAULT_PROMPT = (

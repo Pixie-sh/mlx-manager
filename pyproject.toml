@@ -10,6 +10,22 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "rs" }]
+keywords = ["mlx", "mlx-lm", "apple-silicon", "llm", "local-llm", "cli", "opencode"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = [
     "tomli-w>=1.0",
 ]
@@ -23,3 +39,7 @@ mlx-manager = "mlx_manager.cli:main"
 [tool.setuptools.packages.find]
 include = ["mlx_manager*"]
 exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

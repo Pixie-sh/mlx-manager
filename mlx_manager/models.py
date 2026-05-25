@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Literal
+from typing import Iterator, Literal
 
 from mlx_manager.config import ModelsCfg
 from mlx_manager.paths import expand

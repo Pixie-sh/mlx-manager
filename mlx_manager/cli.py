@@ -265,13 +265,7 @@ def _cmd_list(cfg: Config, args: argparse.Namespace) -> int:
             sz = sum(c.stat().st_size for c in p.rglob("*") if c.is_file())
         except OSError:
             return "?"
-        if sz < 1000:
-            return f"{sz}B"
-        elif sz < 1000**2:
-            return f"{sz/1000:.0f}KB"
-        elif sz < 1000**3:
-            return f"{sz/1000**2:.1f}MB"
-        return f"{sz/1000**3:.1f}GB"
+        return _human_size(sz)
 
     id_w = max((len(m.id) for m in models), default=8)
     id_w = min(max(id_w, 8), 40)
@@ -905,14 +899,16 @@ def _cmd_benchmark(cfg: Config, args: argparse.Namespace) -> int:
             # Measured requests get table-formatted output with bars.
             if not _results:
                 print(f"\n  {'#':<3} {'TTFT':<8} {'Total':<8} {'Tokens':<8} {'Decode':<12} {'Bar'}")
-            ttft_str = "-" if _results[-1].ttft_s is None else f"{_results[-1].ttft_s:.2f}s"
-            total_str = f"{_results[-1].total_s:.2f}s"
-            tok_str = str(_results[-1].completion_tokens)
-            tps_str = f"{_results[-1].decode_tps:.1f} tok/s"
+            last = _results[-1]
+            idx = len(_results)
+            ttft_str = "-" if last.ttft_s is None else f"{last.ttft_s:.2f}s"
+            total_str = f"{last.total_s:.2f}s"
+            tok_str = str(last.completion_tokens)
+            tps_str = f"{last.decode_tps:.1f} tok/s"
             max_tps = max((r.decode_tps for r in _results if r.decode_tps > 0), default=1)
-            bar = bench._ascii_bar(_results[-1].decode_tps, max_tps, 16) if _results[-1].decode_tps > 0 else ""
-            err_str = f" ERR {_results[-1].error}" if not _results[-1].ok else ""
-            print(f"  {_results[-1].finish_reason:<3} {ttft_str:<8} {total_str:<8} {tok_str:<8} {tps_str:<12} {bar}{err_str}")
+            bar = bench._ascii_bar(last.decode_tps, max_tps, 16) if last.decode_tps > 0 else ""
+            err_str = f" ERR {last.error}" if not last.ok else ""
+            print(f"  {idx:<3} {ttft_str:<8} {total_str:<8} {tok_str:<8} {tps_str:<12} {bar}{err_str}")
 
     if not args.as_json:
         print(f"benchmark   endpoint    {endpoint}")
