@@ -49,14 +49,25 @@ No daemon. No database. No web UI. Just `argparse`, a single state file, an
 
 ## Install
 
-Requires Python ≥ 3.11 and [`mlx_lm`](https://pypi.org/project/mlx-lm/)
-installed in the same interpreter `mlx-manager` will use to launch the server
-(by default `python3`). Either of:
+Requires macOS on Apple Silicon, Python >= 3.11, and
+[`mlx_lm`](https://pypi.org/project/mlx-lm/) installed in the same interpreter
+`mlx-manager` will use to launch the server (by default `python3`).
+
+Install the runtime dependencies first:
+
+```bash
+python3 -m pip install mlx-lm
+```
+
+Then install `mlx-manager` from this repository:
 
 ```bash
 uv pip install -e .
 pip install -e .
 ```
+
+The package install also installs `tomli-w`, the only direct runtime dependency
+declared by `mlx-manager` itself.
 
 Then verify your environment:
 
@@ -64,9 +75,8 @@ Then verify your environment:
 mlx-manager doctor
 ```
 
-If `mlx_lm` is missing the doctor will tell you; install it with
-`pip install mlx-lm` into the interpreter named by `[server].python_executable`
-in your config.
+If `mlx_lm` is missing, `doctor` will tell you; install it into the interpreter
+named by `[server].python_executable` in your config.
 
 ## Quick start
 
