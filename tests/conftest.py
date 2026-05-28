@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from mlx_manager.config import Config, ModelsCfg, ProvidersCfg, ServerCfg
+from mlx_manager.config import BotCfg, Config, ModelsCfg, ProvidersCfg, ServerCfg
 
 
 def _make_model_dir(root: Path, name: str, *, sharded: bool = False) -> Path:
@@ -101,6 +101,9 @@ def cfg_factory(tmp_path: Path):
             "base_url": "",
             "api_key": "mlx-local",
             "provider_name": "mlx-local",
+            "bot_model": "mlx-community/gemma-4-e2b-it-4bit",
+            "bot_max_tokens": 1024,
+            "bot_temperature": 0.7,
         }
         defaults.update(overrides)
         server = ServerCfg(
@@ -127,11 +130,17 @@ def cfg_factory(tmp_path: Path):
             api_key=defaults["api_key"],
             provider_name=defaults["provider_name"],
         )
+        bot = BotCfg(
+            model=defaults["bot_model"],
+            max_tokens=defaults["bot_max_tokens"],
+            temperature=defaults["bot_temperature"],
+        )
         return Config(
             path=tmp_path / "config.toml",
             server=server,
             models=models,
             providers=providers,
+            bot=bot,
         )
 
     return make

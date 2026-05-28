@@ -14,6 +14,7 @@ from typing import Any
 
 from mlx_manager import __version__
 from mlx_manager import benchmark as bench
+from mlx_manager import bot as bot_mod
 from mlx_manager.config import Config, ConfigError, DEFAULT_CONFIG_PATH, load
 from mlx_manager.models import discover, resolve
 from mlx_manager.paths import ensure_parent, expand
@@ -205,6 +206,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("doctor", help="run diagnostics")
     sp.add_argument("--json", action="store_true", dest="as_json")
+
+    sp = sub.add_parser(
+        "bot", help="chat with a small on-device LLM about your MLX setup"
+    )
+    sp.add_argument("--model", help="override the bot model (default: [bot].model)")
+    sp.add_argument(
+        "--max-tokens", type=int, help="max tokens per reply (default: [bot].max_tokens)"
+    )
+    sp.add_argument(
+        "--temperature", type=float, help="sampling temperature (default: [bot].temperature)"
+    )
+    sp.add_argument(
+        "--no-context",
+        action="store_true",
+        help="skip injecting live server/doctor state into the system prompt",
+    )
 
     sp = sub.add_parser(
         "benchmark", help="measure TTFT, decode tok/s, and aggregate throughput"
@@ -425,6 +442,10 @@ def _print_status_dict(d: dict) -> None:
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
     print(f"            endpoint  {'ok' if d['endpoint_ok'] else 'unreachable'}")
+    if d.get("health", "ok") != "ok":
+        print(f"            health    ERROR — {d.get('health_detail', '')}")
+    else:
+        print(f"            health    ok")
 
 
 def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
@@ -789,6 +810,11 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
                 "OK" if ok else "FAIL",
                 f"{st.host}:{st.port} {'reachable' if ok else 'unreachable'}",
             )
+            health, detail = srv.log_health(srv.port_log_path(cfg, st.port))
+            if health == "ok":
+                add(f"model :{st.port}", "OK", f"{st.model_alias}: no load errors in log")
+            else:
+                add(f"model :{st.port}", "FAIL", f"{st.model_alias}: {detail}")
     else:
         host, port = cfg.server.host, cfg.server.port
         try:
@@ -911,6 +937,27 @@ def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
         else:
             print("\nresult: OK")
     return EXIT_GENERIC if has_fail else EXIT_OK
+
+
+def _cmd_bot(cfg: Config, args: argparse.Namespace) -> int:
+    model_id = args.model or cfg.bot.model
+    max_tokens = args.max_tokens or cfg.bot.max_tokens
+    temperature = cfg.bot.temperature if args.temperature is None else args.temperature
+
+    with_context = not args.no_context
+    status_dicts = srv.all_status_dicts(cfg) if with_context else []
+    doctor_results = _doctor_checks(cfg) if with_context else []
+    system_prompt = bot_mod.build_system_prompt(
+        status_dicts, doctor_results, with_context=with_context
+    )
+
+    return bot_mod.run(
+        model_id=model_id,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        on_status=lambda m: _eprint(m),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1082,6 +1129,7 @@ _HANDLERS = {
     "info": _cmd_info,
     "doctor": _cmd_doctor,
     "benchmark": _cmd_benchmark,
+    "bot": _cmd_bot,
 }
 
 

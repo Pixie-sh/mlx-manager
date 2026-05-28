@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `LICENSE` (MIT), `CONTRIBUTING.md`, `CHANGELOG.md`, and `.gitignore` for
   open-source housekeeping.
 - README rewritten to document every command, flag, and exit code.
+- `bot` command: an interactive chat with a small on-device LLM (default
+  `mlx-community/gemma-4-e2b-it-4bit`) that auto-injects live server status,
+  `doctor` findings, and recent log errors so it can help troubleshoot.
+  Configurable via the new `[bot]` table (`model`, `max_tokens`,
+  `temperature`); overridable with `--model`/`--max-tokens`/`--temperature`
+  and `--no-context`.
+- Log-based health detection: `status` and `doctor` now scan a server's log
+  for fatal model-load failures (unsupported `model_type`, missing
+  `mlx_lm.models` module, OOM, unreadable weights) and report it. Previously a
+  server whose model could never load still showed `endpoint ok`, because
+  `mlx_lm` loads the model lazily on the first request.
 
 ### Changed
 - `pyproject.toml` now declares classifiers, keywords, and project URLs.

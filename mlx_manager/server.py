@@ -370,6 +370,66 @@ def tail_lines(log_path: Path, n: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Log-based health
+# ---------------------------------------------------------------------------
+
+# mlx_lm logs this when its HTTP listener comes up; the model is loaded lazily
+# on the first request, so /v1/models can answer 200 while the model itself
+# never loads. We bound the health scan to the current session by anchoring on
+# the most recent occurrence of this marker.
+_HTTPD_START_MARKER = "Starting httpd"
+
+# Patterns whose presence in the current session's log means the process is up
+# but cannot actually serve the model. Each maps a regex to a human message.
+_FATAL_LOG_PATTERNS: list[tuple[re.Pattern[str], Any]] = [
+    (
+        re.compile(r"Model type (\S+?) not supported"),
+        lambda m: f"model architecture '{m.group(1)}' is not supported by the installed mlx_lm",
+    ),
+    (
+        re.compile(r"No module named ['\"]mlx_lm\.models\.([\w.]+)['\"]"),
+        lambda m: f"installed mlx_lm has no module for architecture '{m.group(1)}'",
+    ),
+    (
+        re.compile(r"(?:metal::|Metal).{0,80}?out of memory|out of memory", re.IGNORECASE),
+        lambda m: "ran out of memory while loading the model",
+    ),
+    (
+        re.compile(r"SafetensorError|HeaderTooLarge|Error while deserializing header"),
+        lambda m: "failed to read model weights (safetensors error)",
+    ),
+    (
+        re.compile(r"(?:OSError|FileNotFoundError).{0,120}?(?:config\.json|safetensors|tokenizer)"),
+        lambda m: "model files appear to be missing or unreadable",
+    ),
+]
+
+
+def log_health(log_path: Path, scan_lines: int = 600) -> tuple[str, str]:
+    """Inspect the current session's log tail for a fatal model-load error.
+
+    Returns ``("ok", "")`` when nothing fatal is found, otherwise
+    ``("error", human_readable_detail)``. The scan is bounded to lines after
+    the most recent ``Starting httpd`` marker so errors from a previous run of
+    the same (appended) log file are ignored.
+    """
+    lines = tail_lines(log_path, scan_lines)
+    if not lines:
+        return "ok", ""
+    start_idx = 0
+    for i in range(len(lines) - 1, -1, -1):
+        if _HTTPD_START_MARKER in lines[i]:
+            start_idx = i
+            break
+    text = "\n".join(lines[start_idx:])
+    for pattern, fmt in _FATAL_LOG_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return "error", fmt(m)
+    return "ok", ""
+
+
+# ---------------------------------------------------------------------------
 # Readiness probe
 # ---------------------------------------------------------------------------
 
@@ -709,6 +769,8 @@ def status_dict(cfg: Config, port: int | None = None) -> dict[str, Any]:
             "mlx_lm_version": "",
             "uptime_seconds": 0,
             "endpoint_ok": False,
+            "health": "ok",
+            "health_detail": "",
             "stale": False,
         }
     managed = is_managed_process(state.pid, state)
@@ -721,11 +783,16 @@ def status_dict(cfg: Config, port: int | None = None) -> dict[str, Any]:
             uptime = int((datetime.now(timezone.utc) - t0).total_seconds())
         except ValueError:
             uptime = 0
+    health, health_detail = (
+        log_health(port_log_path(cfg, state.port)) if managed else ("ok", "")
+    )
     return {
         **state.to_dict(),
         "running": managed,
         "uptime_seconds": uptime if managed else 0,
         "endpoint_ok": endpoint_ok(state.host, state.port) if managed else False,
+        "health": health,
+        "health_detail": health_detail,
         "stale": (not managed),
     }
 
@@ -750,11 +817,16 @@ def all_status_dicts(cfg: Config) -> list[dict[str, Any]]:
                 uptime = int((datetime.now(timezone.utc) - t0).total_seconds())
             except ValueError:
                 uptime = 0
+        health, health_detail = (
+            log_health(port_log_path(cfg, state.port)) if managed else ("ok", "")
+        )
         results.append({
             **state.to_dict(),
             "running": managed,
             "uptime_seconds": uptime if managed else 0,
             "endpoint_ok": endpoint_ok(state.host, state.port) if managed else False,
+            "health": health,
+            "health_detail": health_detail,
             "stale": not managed,
         })
     return results

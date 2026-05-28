@@ -40,13 +40,19 @@ _DEFAULTS: dict[str, Any] = {
         "api_key": "mlx-local",
         "provider_name": "mlx-local",
     },
+    "bot": {
+        "model": "mlx-community/gemma-4-e2b-it-4bit",
+        "max_tokens": 1024,
+        "temperature": 0.7,
+    },
 }
 
-_KNOWN_TABLES = {"server", "models", "providers"}
+_KNOWN_TABLES = {"server", "models", "providers", "bot"}
 _KNOWN_KEYS = {
     "server": set(_DEFAULTS["server"].keys()),
     "models": {"directories", "default_model", "aliases"},
     "providers": set(_DEFAULTS["providers"].keys()),
+    "bot": set(_DEFAULTS["bot"].keys()),
 }
 
 
@@ -85,11 +91,19 @@ class ProvidersCfg:
 
 
 @dataclass(frozen=True)
+class BotCfg:
+    model: str
+    max_tokens: int
+    temperature: float
+
+
+@dataclass(frozen=True)
 class Config:
     path: Path
     server: ServerCfg
     models: ModelsCfg
     providers: ProvidersCfg
+    bot: BotCfg
 
     @property
     def base_url(self) -> str:
@@ -147,6 +161,16 @@ def _validate(raw: dict[str, Any]) -> None:
     if "aliases" in models and not isinstance(models["aliases"], dict):
         raise ConfigError("[models.aliases] must be a table")
 
+    bot = raw.get("bot", {})
+    if "model" in bot and not isinstance(bot["model"], str):
+        raise ConfigError("bot.model must be a string")
+    if "max_tokens" in bot and (
+        not isinstance(bot["max_tokens"], int) or bot["max_tokens"] <= 0
+    ):
+        raise ConfigError("bot.max_tokens must be a positive int")
+    if "temperature" in bot and not isinstance(bot["temperature"], (int, float)):
+        raise ConfigError("bot.temperature must be a number")
+
 
 def load(path: str | Path | None = None) -> Config:
     """Load config from *path* (default ``~/.config/mlx-manager/config.toml``).
@@ -166,6 +190,7 @@ def load(path: str | Path | None = None) -> Config:
     server = merged["server"]
     models = merged["models"]
     providers = merged["providers"]
+    bot = merged["bot"]
 
     return Config(
         path=cfg_path,
@@ -192,5 +217,10 @@ def load(path: str | Path | None = None) -> Config:
             base_url=str(providers["base_url"]),
             api_key=str(providers["api_key"]),
             provider_name=str(providers["provider_name"]),
+        ),
+        bot=BotCfg(
+            model=str(bot["model"]),
+            max_tokens=int(bot["max_tokens"]),
+            temperature=float(bot["temperature"]),
         ),
     )
