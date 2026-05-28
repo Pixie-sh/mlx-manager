@@ -122,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sp = sub.add_parser("stop", help="stop the managed server")
+    sp.add_argument("--port", type=int, help="port of server to stop (required when multiple are running)")
     sp.add_argument("--timeout", type=int, help="seconds to wait for SIGTERM before SIGKILL")
 
     sp = sub.add_parser("restart", help="stop then start the server")
@@ -145,9 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sp = sub.add_parser("status", help="report server state")
+    sp.add_argument("--port", type=int, help="show status for a specific port only")
     sp.add_argument("--json", action="store_true", dest="as_json")
 
     sp = sub.add_parser("logs", help="tail server log")
+    sp.add_argument("--port", type=int, help="port of server whose log to tail (required when multiple are running)")
     sp.add_argument("--tail", type=int, default=100)
     sp.add_argument("-f", "--follow", action="store_true")
 
@@ -308,7 +311,7 @@ def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
     port = args.port or cfg.server.port
 
     try:
-        with srv.acquire_lock(expand(cfg.server.lock_file)):
+        with srv.acquire_lock(srv.port_lock_path(cfg, port)):
             _vprint("lock acquired", args.verbose)
             state = srv.start(
                 cfg,
@@ -330,21 +333,34 @@ def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
     print(f"  model:      {state.model_alias}")
     print(f"  path:       {state.model_path}")
     print(f"  base_url:   {state.base_url}")
-    print(f"  log:        {expand(cfg.server.log_file)}")
+    print(f"  log:        {srv.port_log_path(cfg, port)}")
     return EXIT_OK
 
 
 def _cmd_stop(cfg: Config, args: argparse.Namespace) -> int:
+    port = getattr(args, "port", None)
+    if port is None:
+        # Auto-detect: error if multiple running, proceed if exactly one.
+        running = srv.list_running_states(cfg)
+        if not running:
+            _eprint("error: no managed server is running")
+            return EXIT_NOT_RUNNING
+        if len(running) > 1:
+            lines = "\n".join(f"  port {s.port}: {s.model_alias}" for s in running)
+            _eprint(f"error: multiple servers running:\n{lines}\nuse --port to specify which to stop")
+            return EXIT_GENERIC
+        port = running[0].port
+
     try:
-        with srv.acquire_lock(expand(cfg.server.lock_file)):
+        with srv.acquire_lock(srv.port_lock_path(cfg, port)):
             _vprint("lock acquired", args.verbose)
-            state = srv.stop(cfg, timeout=args.timeout)
+            state = srv.stop(cfg, port=port, timeout=args.timeout)
             _vprint("lock released", args.verbose)
     except srv.ServerError as e:
         _eprint(f"error: {e}")
         return e.exit_code
-    print(f"stopped pid {state.pid} ({state.model_alias})")
-    _vprint(f"state_file removed: {expand(cfg.server.state_file)}", args.verbose)
+    print(f"stopped pid {state.pid} ({state.model_alias} on port {state.port})")
+    _vprint(f"state_file removed: {srv.port_state_path(cfg, state.port)}", args.verbose)
     return EXIT_OK
 
 
@@ -376,19 +392,17 @@ def _cmd_switch(cfg: Config, args: argparse.Namespace) -> int:
     return _cmd_start(cfg, start_args)
 
 
-def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
-    d = srv.status_dict(cfg)
-    if args.as_json:
-        print(json.dumps(d, indent=2, sort_keys=True))
-        return EXIT_OK if d["running"] else EXIT_NOT_RUNNING
+def _format_uptime(uptime_s: int) -> str:
+    if uptime_s >= 86400:
+        return f"{uptime_s//86400}d {(uptime_s%86400)//3600}h {(uptime_s%3600)//60}m"
+    elif uptime_s >= 3600:
+        return f"{uptime_s//3600}h {(uptime_s%3600)//60}m"
+    elif uptime_s >= 60:
+        return f"{uptime_s//60}m {uptime_s%60}s"
+    return f"{uptime_s}s"
 
-    if not d["running"]:
-        if d["pid"] is None:
-            print("not running")
-        else:
-            print(f"not running (stale state: last pid {d['pid']}, model {d['model_alias']})")
-        return EXIT_NOT_RUNNING
 
+def _print_status_dict(d: dict) -> None:
     print(f"running     pid       {d['pid']}")
     print(f"            model     {d['model_alias']}")
     print(f"            path      {d['model_path']}")
@@ -396,22 +410,10 @@ def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
     print(f"            port      {d['port']}")
     print(f"            base_url  {d['base_url']}")
     print(f"            started   {d['started_at']}")
-
     uptime_s = d["uptime_seconds"]
-    if uptime_s >= 86400:
-        uptime_human = f"{uptime_s//86400}d {(uptime_s%86400)//3600}h {(uptime_s%3600)//60}m"
-    elif uptime_s >= 3600:
-        uptime_human = f"{uptime_s//3600}h {(uptime_s%3600)//60}m"
-    elif uptime_s >= 60:
-        uptime_human = f"{uptime_s//60}m {uptime_s%60}s"
-    else:
-        uptime_human = f"{uptime_s}s"
-    print(f"            uptime    {uptime_human} ({uptime_s}s)")
-
+    print(f"            uptime    {_format_uptime(uptime_s)} ({uptime_s}s)")
     if d.get("mlx_lm_version"):
         print(f"            mlx_lm    {d['mlx_lm_version']}")
-
-    # Memory usage from ps.
     try:
         ps_out = subprocess.run(
             ["ps", "-p", str(d["pid"]), "-o", "rss="],
@@ -419,17 +421,66 @@ def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
         )
         if ps_out.returncode == 0:
             rss = int(ps_out.stdout.strip())
-            rss_mb = rss / 1024 / 1024
-            print(f"            memory    {rss_mb:.0f}MB (rss)")
+            print(f"            memory    {rss / 1024 / 1024:.0f}MB (rss)")
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
-
     print(f"            endpoint  {'ok' if d['endpoint_ok'] else 'unreachable'}")
-    return EXIT_OK
+
+
+def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
+    port = getattr(args, "port", None)
+
+    if port is not None:
+        # Single-server view.
+        d = srv.status_dict(cfg, port)
+        if args.as_json:
+            print(json.dumps(d, indent=2, sort_keys=True))
+            return EXIT_OK if d["running"] else EXIT_NOT_RUNNING
+        if not d["running"]:
+            if d["pid"] is None:
+                print(f"not running (port {port})")
+            else:
+                print(f"not running (stale: last pid {d['pid']}, model {d['model_alias']})")
+            return EXIT_NOT_RUNNING
+        _print_status_dict(d)
+        return EXIT_OK
+
+    # Multi-server view.
+    all_dicts = srv.all_status_dicts(cfg)
+    running = [d for d in all_dicts if d["running"]]
+
+    if args.as_json:
+        print(json.dumps(all_dicts, indent=2, sort_keys=True))
+        return EXIT_OK if running else EXIT_NOT_RUNNING
+
+    if not all_dicts:
+        print("not running")
+        return EXIT_NOT_RUNNING
+
+    for i, d in enumerate(all_dicts):
+        if i > 0:
+            print()
+        if not d["running"]:
+            print(f"not running (stale: port {d['port']}, last pid {d['pid']}, model {d['model_alias']})")
+        else:
+            _print_status_dict(d)
+
+    return EXIT_OK if running else EXIT_NOT_RUNNING
 
 
 def _cmd_logs(cfg: Config, args: argparse.Namespace) -> int:
-    log_path = expand(cfg.server.log_file)
+    port = getattr(args, "port", None)
+    if port is None:
+        running = srv.list_running_states(cfg)
+        if not running:
+            _eprint("error: no managed server is running")
+            return EXIT_NOT_RUNNING
+        if len(running) > 1:
+            lines = "\n".join(f"  port {s.port}: {s.model_alias}" for s in running)
+            _eprint(f"error: multiple servers running:\n{lines}\nuse --port to specify which server's log to tail")
+            return EXIT_GENERIC
+        port = running[0].port
+    log_path = srv.port_log_path(cfg, port)
     if not log_path.exists():
         _eprint(f"error: log file {log_path} does not exist")
         return EXIT_NOT_RUNNING
@@ -461,7 +512,7 @@ def _pick_provider_model(cfg: Config, requested: str | None) -> str | None:
     """
     if requested:
         return requested
-    state = srv.read_state(expand(cfg.server.state_file))
+    state = srv.primary_state(cfg)
     if state is not None:
         return state.model_alias
     if cfg.models.default_model:
@@ -472,55 +523,82 @@ def _pick_provider_model(cfg: Config, requested: str | None) -> str | None:
     return None
 
 
-def _provider_context(cfg: Config, model_id: str, *, remote: bool = False) -> ProviderContext:
-    state = srv.read_state(expand(cfg.server.state_file))
-    if state is not None and srv.is_managed_process(state.pid, state):
-        base_url = state.base_url
-    else:
-        base_url = cfg.base_url
-    # When --remote is given, swap localhost/wildcard for the LAN IP so the
-    # config works for clients on the same network that can't reach 127.0.0.1.
+def _resolve_base_url(base_url: str, *, remote: bool) -> str:
     if remote and base_url.startswith("http://127.0.0.1"):
         lan = _lan_ip()
         if lan:
-            base_url = base_url.replace("http://127.0.0.1", f"http://{lan}", 1)
+            return base_url.replace("http://127.0.0.1", f"http://{lan}", 1)
     elif remote and base_url.startswith("http://0.0.0.0"):
         lan = _lan_ip()
         if lan:
-            base_url = base_url.replace("http://0.0.0.0", f"http://{lan}", 1)
-    # When --remote is given, append the hostname to the provider name so
-    # remote clients can distinguish this provider from others on the network.
-    provider_name = cfg.providers.provider_name
-    if remote:
-        hostname = socket.gethostname()
-        provider_name = f"{provider_name}@{hostname}"
-    return ProviderContext(
-        base_url=base_url,
-        api_key=cfg.providers.api_key,
-        provider_name=provider_name,
-        model_id=model_id,
-    )
+            return base_url.replace("http://0.0.0.0", f"http://{lan}", 1)
+    return base_url
+
+
+def _provider_contexts(
+    cfg: Config, model_id: str | None, *, remote: bool = False
+) -> list[ProviderContext]:
+    """Return one ProviderContext per running server (or one from config if none running).
+
+    When multiple servers are running the provider name gets a ``:port`` suffix
+    so each entry is uniquely addressable.
+    """
+    running = srv.list_running_states(cfg)
+    hostname = socket.gethostname() if remote else ""
+    multi = len(running) > 1
+
+    def _make_name(port: int | None = None) -> str:
+        name = cfg.providers.provider_name
+        if remote:
+            name = f"{name}@{hostname}"
+        if multi and port is not None:
+            name = f"{name}:{port}"
+        return name
+
+    if not running:
+        base_url = _resolve_base_url(cfg.base_url, remote=remote)
+        return [ProviderContext(
+            base_url=base_url,
+            api_key=cfg.providers.api_key,
+            provider_name=_make_name(),
+            model_id=model_id or cfg.models.default_model or "",
+        )]
+
+    return [
+        ProviderContext(
+            base_url=_resolve_base_url(state.base_url, remote=remote),
+            api_key=cfg.providers.api_key,
+            provider_name=_make_name(state.port),
+            model_id=model_id or state.model_alias,
+        )
+        for state in running
+    ]
+
+
+def _provider_context(cfg: Config, model_id: str, *, remote: bool = False) -> ProviderContext:
+    """Single-context helper used by commands that only need one server (e.g. claude-code)."""
+    contexts = _provider_contexts(cfg, model_id, remote=remote)
+    return contexts[0]
 
 
 def _cmd_config_opencode(cfg: Config, args: argparse.Namespace) -> int:
-    model_id = _pick_provider_model(cfg, args.model)
-    if not model_id:
+    remote = getattr(args, "remote", False)
+    contexts = _provider_contexts(cfg, args.model, remote=remote)
+    if not any(c.model_id for c in contexts):
         _eprint("error: no model available; pass --model or run `mlx-manager list`")
         return EXIT_CONFIG
-    remote = getattr(args, "remote", False)
-    ctx = _provider_context(cfg, model_id, remote=remote)
     if remote:
         _vprint(f"remote mode: using LAN IP in config", args.verbose)
     if args.apply:
         target = expand(args.target)
         try:
-            summary = apply_opencode(ctx, target, overwrite=args.overwrite)
+            summary = apply_opencode(contexts, target, overwrite=args.overwrite)
         except (ApplyError, OSError) as e:
             _eprint(f"error: {e}")
             return EXIT_CONFIG
         print(summary)
         return EXIT_OK
-    sys.stdout.write(opencode_snippet(ctx, format=args.format))
+    sys.stdout.write(opencode_snippet(contexts, format=args.format))
     return EXIT_OK
 
 
@@ -701,18 +779,18 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
         except OSError as e:
             add(f"{key} parent writable", "FAIL", f"{raw}: {e}")
 
-    # Port reachability.
-    state = srv.read_state(expand(cfg.server.state_file))
-    host, port = cfg.server.host, cfg.server.port
-    if state is not None and srv.is_managed_process(state.pid, state):
-        ok = srv.endpoint_ok(state.host, state.port)
-        add(
-            "endpoint",
-            "OK" if ok else "FAIL",
-            f"{state.host}:{state.port} {'reachable' if ok else 'unreachable'}",
-        )
+    # Port reachability — check all running servers, fall back to config default.
+    running_states = srv.list_running_states(cfg)
+    if running_states:
+        for st in running_states:
+            ok = srv.endpoint_ok(st.host, st.port)
+            add(
+                f"endpoint :{st.port}",
+                "OK" if ok else "FAIL",
+                f"{st.host}:{st.port} {'reachable' if ok else 'unreachable'}",
+            )
     else:
-        # Best-effort: see if the port can be bound (then immediately release).
+        host, port = cfg.server.host, cfg.server.port
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(1.0)
@@ -841,8 +919,8 @@ def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_benchmark(cfg: Config, args: argparse.Namespace) -> int:
-    state = srv.read_state(expand(cfg.server.state_file))
-    running = state is not None and srv.is_managed_process(state.pid, state)
+    state = srv.primary_state(cfg)
+    running = state is not None
 
     if args.endpoint:
         endpoint = args.endpoint.rstrip("/")

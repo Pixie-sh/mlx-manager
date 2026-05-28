@@ -54,6 +54,34 @@ class State:
 
 
 # ---------------------------------------------------------------------------
+# Port-keyed path helpers
+# ---------------------------------------------------------------------------
+
+
+def _servers_dir(cfg: "Config") -> Path:
+    return expand(cfg.server.state_file).parent / "servers"
+
+
+def port_state_path(cfg: "Config", port: int) -> Path:
+    return _servers_dir(cfg) / f"{port}.json"
+
+
+def port_pid_path(cfg: "Config", port: int) -> Path:
+    p = expand(cfg.server.pid_file)
+    return p.parent / f"{p.stem}.{port}{p.suffix}"
+
+
+def port_lock_path(cfg: "Config", port: int) -> Path:
+    p = expand(cfg.server.lock_file)
+    return Path(f"{p}.{port}")
+
+
+def port_log_path(cfg: "Config", port: int) -> Path:
+    p = expand(cfg.server.log_file)
+    return p.parent / f"{p.stem}.{port}{p.suffix}"
+
+
+# ---------------------------------------------------------------------------
 # Lock
 # ---------------------------------------------------------------------------
 
@@ -124,11 +152,37 @@ def read_state(state_path: Path) -> State | None:
         return None
 
 
-def clear_state(cfg: Config) -> None:
-    for path in (cfg.server.state_file, cfg.server.pid_file):
-        p = expand(path)
+def list_running_states(cfg: Config) -> list[State]:
+    """Return all currently-running managed server states, sorted by port."""
+    d = _servers_dir(cfg)
+    if not d.exists():
+        return []
+    states = []
+    for f in sorted(d.glob("*.json")):
+        state = read_state(f)
+        if state is not None and is_managed_process(state.pid, state):
+            states.append(state)
+    return states
+
+
+def primary_state(cfg: Config) -> State | None:
+    """Return the 'primary' running state for single-server commands.
+
+    Prefers the configured default port; falls back to the first running server.
+    """
+    running = list_running_states(cfg)
+    if not running:
+        return None
+    for s in running:
+        if s.port == cfg.server.port:
+            return s
+    return running[0]
+
+
+def clear_state(cfg: Config, port: int) -> None:
+    for path in (port_state_path(cfg, port), port_pid_path(cfg, port)):
         with contextlib.suppress(FileNotFoundError):
-            p.unlink()
+            path.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -473,9 +527,9 @@ def start(
     on_verbose=None,
 ) -> State:
     """Start the server. Returns the live State or raises ServerError."""
-    state_path = expand(cfg.server.state_file)
-    pid_path = expand(cfg.server.pid_file)
-    log_path = expand(cfg.server.log_file)
+    state_path = port_state_path(cfg, port)
+    pid_path = port_pid_path(cfg, port)
+    log_path = port_log_path(cfg, port)
 
     if not mlx_lm_installed(cfg.server.python_executable):
         raise ServerError(
@@ -500,14 +554,13 @@ def start(
     if existing is not None and is_managed_process(existing.pid, existing):
         if not replace:
             raise ServerError(
-                f"server already running (pid {existing.pid}, model "
+                f"server already running on port {port} (pid {existing.pid}, model "
                 f"{existing.model_alias!r}); use --replace to swap",
                 exit_code=5,
             )
         if on_verbose:
             on_verbose(f"stopping existing server (pid {existing.pid})")
-        # Stop existing before starting new.
-        stop(cfg, timeout=cfg.server.stop_timeout_seconds)
+        stop(cfg, port=port, timeout=cfg.server.stop_timeout_seconds)
 
     if _is_port_in_use(host, port):
         owner = port_listener_pid(port)
@@ -562,7 +615,7 @@ def start(
         except subprocess.TimeoutExpired:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(proc.pid, signal.SIGKILL)
-        clear_state(cfg)
+        clear_state(cfg, port)
         tail = "\n".join(tail_lines(log_path, 40))
         raise ServerError(
             f"server did not become ready within "
@@ -573,12 +626,28 @@ def start(
     return state
 
 
-def stop(cfg: Config, *, timeout: int | None = None) -> State:
-    """Stop the managed server. Returns the killed State or raises ServerError(4)."""
-    state_path = expand(cfg.server.state_file)
+def stop(cfg: Config, *, port: int | None = None, timeout: int | None = None) -> State:
+    """Stop the managed server. Returns the killed State or raises ServerError(4).
+
+    If *port* is None and exactly one server is running, it is stopped.
+    If multiple servers are running, raises ServerError listing them.
+    """
+    if port is None:
+        running = list_running_states(cfg)
+        if not running:
+            raise ServerError("no managed server is running", exit_code=4)
+        if len(running) > 1:
+            summary = ", ".join(f":{s.port} ({s.model_alias})" for s in running)
+            raise ServerError(
+                f"multiple servers running ({summary}); use --port to specify which to stop",
+                exit_code=1,
+            )
+        port = running[0].port
+
+    state_path = port_state_path(cfg, port)
     state = read_state(state_path)
     if state is None or not pid_alive(state.pid):
-        clear_state(cfg)
+        clear_state(cfg, port)
         raise ServerError("no managed server is running", exit_code=4)
 
     cmd = pid_command(state.pid)
@@ -599,7 +668,7 @@ def stop(cfg: Config, *, timeout: int | None = None) -> State:
     try:
         os.kill(state.pid, signal.SIGTERM)
     except ProcessLookupError:
-        clear_state(cfg)
+        clear_state(cfg, port)
         raise ServerError("process disappeared before SIGTERM", exit_code=4)
 
     deadline = time.monotonic() + t
@@ -611,7 +680,7 @@ def stop(cfg: Config, *, timeout: int | None = None) -> State:
         with contextlib.suppress(ProcessLookupError):
             os.kill(state.pid, signal.SIGKILL)
 
-    clear_state(cfg)
+    clear_state(cfg, port)
     return state
 
 
@@ -620,8 +689,10 @@ def stop(cfg: Config, *, timeout: int | None = None) -> State:
 # ---------------------------------------------------------------------------
 
 
-def status_dict(cfg: Config) -> dict[str, Any]:
-    state_path = expand(cfg.server.state_file)
+def status_dict(cfg: Config, port: int | None = None) -> dict[str, Any]:
+    if port is None:
+        port = cfg.server.port
+    state_path = port_state_path(cfg, port)
     state = read_state(state_path)
     if state is None:
         return {
@@ -657,3 +728,33 @@ def status_dict(cfg: Config) -> dict[str, Any]:
         "endpoint_ok": endpoint_ok(state.host, state.port) if managed else False,
         "stale": (not managed),
     }
+
+
+def all_status_dicts(cfg: Config) -> list[dict[str, Any]]:
+    """Return a status dict for every managed server (running or stale)."""
+    d = _servers_dir(cfg)
+    if not d.exists():
+        return []
+    results = []
+    for f in sorted(d.glob("*.json")):
+        state = read_state(f)
+        if state is None:
+            continue
+        managed = is_managed_process(state.pid, state)
+        uptime = 0
+        if state.started_at:
+            try:
+                t0 = datetime.strptime(state.started_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+                uptime = int((datetime.now(timezone.utc) - t0).total_seconds())
+            except ValueError:
+                uptime = 0
+        results.append({
+            **state.to_dict(),
+            "running": managed,
+            "uptime_seconds": uptime if managed else 0,
+            "endpoint_ok": endpoint_ok(state.host, state.port) if managed else False,
+            "stale": not managed,
+        })
+    return results

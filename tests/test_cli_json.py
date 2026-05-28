@@ -51,7 +51,15 @@ def test_status_json_when_not_running(tmp_path, monkeypatch, capsys):
         '[server]\nlog_file = "{0}/mlx.log"\npid_file = "{0}/mlx.pid"\n'
         'state_file = "{0}/state.json"\nlock_file = "{0}/mlx.lock"\n'.format(tmp_path)
     )
+    # Without --port: returns a list (empty when nothing is running).
     rc, out, _ = _run(monkeypatch, capsys, ["status", "--json"], config_path=cfg)
+    assert rc == 4
+    items = json.loads(out)
+    assert isinstance(items, list)
+    assert items == []
+
+    # With --port: returns a single status dict.
+    rc, out, _ = _run(monkeypatch, capsys, ["status", "--port", "8080", "--json"], config_path=cfg)
     assert rc == 4
     d = json.loads(out)
     assert d["running"] is False

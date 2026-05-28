@@ -106,7 +106,7 @@ def test_reused_pid_with_wrong_argv_is_not_managed(tmp_path):
 def test_stop_refuses_when_state_pid_argv_unrelated(tmp_path, cfg_factory):
     """Reused-PID safety: stop must refuse to kill an unrelated process."""
     cfg = cfg_factory()
-    state_path = expand(cfg.server.state_file)
+    state_path = srv.port_state_path(cfg, cfg.server.port)
 
     p = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -130,7 +130,7 @@ def test_stop_refuses_when_state_pid_argv_unrelated(tmp_path, cfg_factory):
             ),
         )
         with pytest.raises(srv.ServerError) as ei:
-            srv.stop(cfg)
+            srv.stop(cfg, port=cfg.server.port)
         assert ei.value.exit_code == 1
         # And the unrelated process is still alive.
         assert srv.pid_alive(p.pid)
@@ -141,7 +141,7 @@ def test_stop_refuses_when_state_pid_argv_unrelated(tmp_path, cfg_factory):
 
 def test_stop_reports_not_running_for_dead_pid(tmp_path, cfg_factory):
     cfg = cfg_factory()
-    state_path = expand(cfg.server.state_file)
+    state_path = srv.port_state_path(cfg, cfg.server.port)
     srv.write_state(
         state_path,
         srv.State(
@@ -157,9 +157,9 @@ def test_stop_reports_not_running_for_dead_pid(tmp_path, cfg_factory):
         ),
     )
     with pytest.raises(srv.ServerError) as ei:
-        srv.stop(cfg)
+        srv.stop(cfg, port=cfg.server.port)
     assert ei.value.exit_code == 4
-    # State files cleaned up.
+    # State file cleaned up.
     assert not state_path.exists()
 
 

@@ -38,16 +38,25 @@ def _opencode_provider_block(ctx: ProviderContext) -> dict:
     }
 
 
-def opencode_snippet(ctx: ProviderContext, *, format: str = "merge") -> str:
+def opencode_snippet(ctx: ProviderContext | list[ProviderContext], *, format: str = "merge") -> str:
     """Return a JSON snippet for OpenCode.
 
     ``merge`` form (default): just the ``provider`` map, suitable for merging
     into an existing ``opencode.json``. ``full`` form wraps it in a complete
     ``opencode.json``-shaped document with the public ``$schema`` reference.
+
+    *ctx* may be a single :class:`ProviderContext` or a list; when a list is
+    given all provider blocks are merged into one ``provider`` map.
     """
     if format not in ("merge", "full"):
         raise ValueError(f"format must be 'merge' or 'full' (got {format!r})")
-    inner = {"provider": _opencode_provider_block(ctx)}
+    if isinstance(ctx, list):
+        merged: dict = {}
+        for c in ctx:
+            merged.update(_opencode_provider_block(c))
+        inner = {"provider": merged}
+    else:
+        inner = {"provider": _opencode_provider_block(ctx)}
     if format == "full":
         doc = {"$schema": "https://opencode.ai/config.json", **inner}
     else:
@@ -77,14 +86,15 @@ def _merge_opencode_provider(existing: dict, new_block: dict) -> dict:
 
 
 def apply_opencode(
-    ctx: ProviderContext, target: Path, *, overwrite: bool = False
+    ctx: ProviderContext | list[ProviderContext], target: Path, *, overwrite: bool = False
 ) -> str:
-    """Write the OpenCode provider block into *target*.
+    """Write the OpenCode provider block(s) into *target*.
 
-    Returns a one-line summary describing the action taken. Always writes a
-    sibling ``<target>.bak`` of the previous content (if any) before replacing
-    the file. The write is atomic (write-tmp + rename).
+    *ctx* may be a single :class:`ProviderContext` or a list (one entry per
+    running server). Returns a summary string. Always writes a sibling
+    ``<target>.bak`` before replacing the file. The write is atomic.
     """
+    contexts = ctx if isinstance(ctx, list) else [ctx]
     target = Path(target)
     if target.exists():
         try:
@@ -103,18 +113,19 @@ def apply_opencode(
     if not isinstance(providers, dict):
         raise ApplyError("`provider` key exists but is not a JSON object")
 
-    new_block = _opencode_provider_block(ctx)[ctx.provider_name]
-    existing = providers.get(ctx.provider_name)
-
-    if existing is None:
-        providers[ctx.provider_name] = new_block
-        action = "added"
-    elif overwrite:
-        providers[ctx.provider_name] = new_block
-        action = "overwritten"
-    else:
-        providers[ctx.provider_name] = _merge_opencode_provider(existing, new_block)
-        action = "merged"
+    actions: list[str] = []
+    for c in contexts:
+        new_block = _opencode_provider_block(c)[c.provider_name]
+        existing = providers.get(c.provider_name)
+        if existing is None:
+            providers[c.provider_name] = new_block
+            actions.append(f"{c.provider_name!r} added")
+        elif overwrite:
+            providers[c.provider_name] = new_block
+            actions.append(f"{c.provider_name!r} overwritten")
+        else:
+            providers[c.provider_name] = _merge_opencode_provider(existing, new_block)
+            actions.append(f"{c.provider_name!r} merged")
 
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".tmp")
@@ -122,7 +133,7 @@ def apply_opencode(
         json.dump(doc, f, indent=2)
         f.write("\n")
     os.replace(tmp, target)
-    return f"provider {ctx.provider_name!r} {action} in {target}"
+    return f"{', '.join(actions)} in {target}"
 
 
 def claude_code_experimental_env(ctx: ProviderContext) -> str:
