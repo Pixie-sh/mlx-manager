@@ -102,6 +102,7 @@ def cfg_factory(tmp_path: Path):
             "api_key": "mlx-local",
             "provider_name": "mlx-local",
             "bot_model": "mlx-community/gemma-4-e2b-it-4bit",
+            "bot_cache_dir": str(tmp_path / "bot"),
             "bot_max_tokens": 1024,
             "bot_temperature": 0.7,
         }
@@ -132,6 +133,7 @@ def cfg_factory(tmp_path: Path):
         )
         bot = BotCfg(
             model=defaults["bot_model"],
+            cache_dir=defaults["bot_cache_dir"],
             max_tokens=defaults["bot_max_tokens"],
             temperature=defaults["bot_temperature"],
         )

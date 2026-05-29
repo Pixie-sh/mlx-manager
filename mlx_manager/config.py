@@ -28,6 +28,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     "models": {
         "directories": [
+            "~/.mlx-manager/models",
             "~/models/mlx",
             "~/.cache/huggingface/hub",
             "~/.lmstudio/models",
@@ -42,6 +43,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     "bot": {
         "model": "mlx-community/gemma-4-e2b-it-4bit",
+        "cache_dir": "~/.mlx-manager/bot",
         "max_tokens": 1024,
         "temperature": 0.7,
     },
@@ -93,6 +95,7 @@ class ProvidersCfg:
 @dataclass(frozen=True)
 class BotCfg:
     model: str
+    cache_dir: str
     max_tokens: int
     temperature: float
 
@@ -164,6 +167,8 @@ def _validate(raw: dict[str, Any]) -> None:
     bot = raw.get("bot", {})
     if "model" in bot and not isinstance(bot["model"], str):
         raise ConfigError("bot.model must be a string")
+    if "cache_dir" in bot and not isinstance(bot["cache_dir"], str):
+        raise ConfigError("bot.cache_dir must be a string")
     if "max_tokens" in bot and (
         not isinstance(bot["max_tokens"], int) or bot["max_tokens"] <= 0
     ):
@@ -220,6 +225,7 @@ def load(path: str | Path | None = None) -> Config:
         ),
         bot=BotCfg(
             model=str(bot["model"]),
+            cache_dir=str(bot["cache_dir"]),
             max_tokens=int(bot["max_tokens"]),
             temperature=float(bot["temperature"]),
         ),

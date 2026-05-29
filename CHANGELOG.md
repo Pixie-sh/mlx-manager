@@ -13,10 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - README rewritten to document every command, flag, and exit code.
 - `bot` command: an interactive chat with a small on-device LLM (default
   `mlx-community/gemma-4-e2b-it-4bit`) that auto-injects live server status,
-  `doctor` findings, and recent log errors so it can help troubleshoot.
-  Configurable via the new `[bot]` table (`model`, `max_tokens`,
-  `temperature`); overridable with `--model`/`--max-tokens`/`--temperature`
-  and `--no-context`.
+  `doctor` findings, and recent log errors so it can help troubleshoot. The
+  model is downloaded once into `~/.mlx-manager/bot` (configurable via
+  `[bot].cache_dir`) and reused offline thereafter. Configurable via the new
+  `[bot]` table (`model`, `cache_dir`, `max_tokens`, `temperature`);
+  overridable with `--model`/`--max-tokens`/`--temperature` and `--no-context`.
+  On first run (interactive terminal, no model downloaded yet) it offers a
+  curated menu of lightweight, capable models — Gemma 4 E2B/E4B, Qwen3 1.7B,
+  Llama 3.2 3B, Ministral 3B — and remembers the choice; re-pick with
+  `--choose`.
+- `~/.mlx-manager/models` is now the first default model-discovery directory.
+- `doctor` now reports a `bot runtime` check: whether `mlx_lm` is importable in
+  the interpreter running mlx-manager itself (what the in-process `bot` needs),
+  which can differ from `server.python_executable`.
+- `doctor --fix` attempts remediation: installs `mlx_lm` into the bot runtime
+  (`pipx inject <app> mlx-lm` when mlx-manager is pipx-isolated, else
+  `pip install`) and creates missing configured model directories. Fix progress
+  is written to stderr so `--json` output stays clean.
 - Log-based health detection: `status` and `doctor` now scan a server's log
   for fatal model-load failures (unsupported `model_type`, missing
   `mlx_lm.models` module, OOM, unreadable weights) and report it. Previously a

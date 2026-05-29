@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -206,11 +207,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("doctor", help="run diagnostics")
     sp.add_argument("--json", action="store_true", dest="as_json")
+    sp.add_argument(
+        "--fix",
+        action="store_true",
+        help="attempt to fix issues (install mlx_lm for the bot, create missing dirs)",
+    )
 
     sp = sub.add_parser(
         "bot", help="chat with a small on-device LLM about your MLX setup"
     )
     sp.add_argument("--model", help="override the bot model (default: [bot].model)")
+    sp.add_argument(
+        "--choose",
+        action="store_true",
+        help="re-pick the bot model from the menu (ignores the saved selection)",
+    )
     sp.add_argument(
         "--max-tokens", type=int, help="max tokens per reply (default: [bot].max_tokens)"
     )
@@ -729,6 +740,83 @@ def _cmd_config_edit(cfg: Config, args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _mlx_lm_importable_here() -> bool:
+    """True if ``mlx_lm`` can be imported by the interpreter running mlx-manager.
+
+    This is what the in-process ``bot`` command needs, and is independent of
+    ``server.python_executable`` (which only matters for the ``start`` subprocess).
+    """
+    importlib.invalidate_caches()
+    return importlib.util.find_spec("mlx_lm") is not None
+
+
+def _pipx_app_name() -> str | None:
+    """If the current interpreter is a pipx-managed venv, return its app name.
+
+    pipx venvs live at ``.../pipx/venvs/<app>``; injecting a library into that
+    app is the correct way to make it importable here.
+    """
+    parts = Path(sys.prefix).parts
+    if "pipx" in parts and "venvs" in parts:
+        i = parts.index("venvs")
+        if i + 1 < len(parts):
+            return parts[i + 1]
+    return None
+
+
+def _mlx_lm_install_cmd() -> list[str]:
+    """Build the command that installs mlx_lm into the bot's runtime."""
+    app = _pipx_app_name()
+    if app and shutil.which("pipx"):
+        return ["pipx", "inject", app, "mlx-lm"]
+    return [sys.executable, "-m", "pip", "install", "mlx-lm"]
+
+
+def _run_fix_cmd(cmd: list[str]) -> int:
+    """Run a remediation command, echoing it and a short output tail to stderr."""
+    _eprint(f"  $ {' '.join(cmd)}")
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        _eprint(f"  → could not run: {e}")
+        return 1
+    tail = (out.stdout or "").strip().splitlines()[-3:]
+    tail += (out.stderr or "").strip().splitlines()[-3:]
+    for line in tail:
+        _eprint(f"    {line}")
+    return out.returncode
+
+
+def _doctor_fix(cfg: Config) -> None:
+    """Attempt to remediate fixable doctor issues. Progress goes to stderr."""
+    _eprint("doctor --fix: attempting remediations")
+    fixed_any = False
+
+    if not _mlx_lm_importable_here():
+        fixed_any = True
+        cmd = _mlx_lm_install_cmd()
+        _eprint(f"- installing mlx_lm for the bot runtime ({sys.executable})")
+        rc = _run_fix_cmd(cmd)
+        if rc == 0 and _mlx_lm_importable_here():
+            _eprint("  → ok")
+        else:
+            _eprint("  → still missing; install mlx_lm manually into this environment")
+
+    for raw_dir in cfg.models.directories:
+        d = expand(raw_dir)
+        if not d.exists():
+            fixed_any = True
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                _eprint(f"- created models dir {d}")
+            except OSError as e:
+                _eprint(f"- could not create {d}: {e}")
+
+    if not fixed_any:
+        _eprint("- nothing to fix")
+    _eprint("")
+
+
 def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
 
@@ -764,6 +852,23 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
             "`import mlx_lm` failed; install with `pip install mlx-lm`",
         )
         add("mlx_lm server --help", "WARN", "skipped (mlx_lm missing)")
+
+    # The `bot` command imports mlx_lm into THIS interpreter, which can differ
+    # from server.python_executable (e.g. when mlx-manager is pipx-isolated).
+    if _mlx_lm_importable_here():
+        add("bot runtime", "OK", f"mlx_lm importable here ({sys.executable})")
+    else:
+        app = _pipx_app_name()
+        hint = (
+            f"run `mlx-manager doctor --fix` (will run `pipx inject {app} mlx-lm`)"
+            if app
+            else "run `mlx-manager doctor --fix`"
+        )
+        add(
+            "bot runtime",
+            "FAIL",
+            f"mlx_lm not importable in {sys.executable} (needed by `bot`); {hint}",
+        )
 
     for raw_dir in cfg.models.directories:
         d = expand(raw_dir)
@@ -925,6 +1030,8 @@ def _cmd_info(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
+    if getattr(args, "fix", False):
+        _doctor_fix(cfg)
     results = _doctor_checks(cfg)
     has_fail = any(r["status"] == "FAIL" for r in results)
     if args.as_json:
@@ -940,7 +1047,6 @@ def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_bot(cfg: Config, args: argparse.Namespace) -> int:
-    model_id = args.model or cfg.bot.model
     max_tokens = args.max_tokens or cfg.bot.max_tokens
     temperature = cfg.bot.temperature if args.temperature is None else args.temperature
 
@@ -952,10 +1058,13 @@ def _cmd_bot(cfg: Config, args: argparse.Namespace) -> int:
     )
 
     return bot_mod.run(
-        model_id=model_id,
+        model_override=args.model,
+        default_model=cfg.bot.model,
+        cache_dir=cfg.bot.cache_dir,
         system_prompt=system_prompt,
         max_tokens=max_tokens,
         temperature=temperature,
+        force_choose=args.choose,
         on_status=lambda m: _eprint(m),
     )
 
