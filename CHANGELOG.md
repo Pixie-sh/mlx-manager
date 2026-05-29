@@ -28,8 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   which can differ from `server.python_executable`.
 - `doctor --fix` attempts remediation: installs `mlx_lm` into the bot runtime
   (`pipx inject <app> mlx-lm` when mlx-manager is pipx-isolated, else
-  `pip install`) and creates missing configured model directories. Fix progress
-  is written to stderr so `--json` output stays clean.
+  `pip install`), creates missing configured model directories, and — when the
+  default `server.python_executable` ("python3") can't import `mlx_lm` but the
+  current interpreter can — repoints it at the working interpreter so `start`
+  works without modifying an externally-managed Python. Fix progress is written
+  to stderr so `--json` output stays clean.
+- `config.update_value()` helper to set a single config key in place.
 - Log-based health detection: `status` and `doctor` now scan a server's log
   for fatal model-load failures (unsupported `model_type`, missing
   `mlx_lm.models` module, OOM, unreadable weights) and report it. Previously a

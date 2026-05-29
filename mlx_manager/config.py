@@ -130,6 +130,25 @@ def write_default(path: Path) -> None:
         tomli_w.dump(_DEFAULTS, f)
 
 
+def update_value(path: str | Path, table: str, key: str, value: Any) -> None:
+    """Set ``[table].key = value`` in the TOML at *path*, preserving other keys.
+
+    Reads the existing file (creating defaults first if absent), sets the one
+    value, re-validates, and writes the whole document back. TOML comments are
+    not preserved.
+    """
+    p = expand(path)
+    if not p.exists():
+        write_default(p)
+    with open(p, "rb") as f:
+        raw = tomllib.load(f)
+    raw.setdefault(table, {})[key] = value
+    _validate(raw)
+    ensure_parent(p)
+    with open(p, "wb") as f:
+        tomli_w.dump(raw, f)
+
+
 def _validate(raw: dict[str, Any]) -> None:
     for key in raw.keys():
         if key not in _KNOWN_TABLES:

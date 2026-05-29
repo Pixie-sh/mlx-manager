@@ -16,7 +16,13 @@ from typing import Any
 from mlx_manager import __version__
 from mlx_manager import benchmark as bench
 from mlx_manager import bot as bot_mod
-from mlx_manager.config import Config, ConfigError, DEFAULT_CONFIG_PATH, load
+from mlx_manager.config import (
+    Config,
+    ConfigError,
+    DEFAULT_CONFIG_PATH,
+    load,
+    update_value,
+)
 from mlx_manager.models import discover, resolve
 from mlx_manager.paths import ensure_parent, expand
 from mlx_manager.providers import (
@@ -811,6 +817,29 @@ def _doctor_fix(cfg: Config) -> None:
                 _eprint(f"- created models dir {d}")
             except OSError as e:
                 _eprint(f"- could not create {d}: {e}")
+
+    # Make `start` work too: the server runs `<python_executable> -m mlx_lm
+    # server` as a subprocess. If that interpreter can't import mlx_lm but this
+    # one can (e.g. mlx-manager is pipx-isolated and the server default is a
+    # Homebrew python without mlx_lm), repoint the default at this interpreter
+    # rather than touching an externally-managed Python.
+    if not srv.mlx_lm_installed(cfg.server.python_executable) and _mlx_lm_importable_here():
+        if cfg.server.python_executable == "python3":
+            try:
+                update_value(cfg.path, "server", "python_executable", sys.executable)
+                fixed_any = True
+                _eprint(
+                    f"- set server.python_executable = {sys.executable} "
+                    "(was 'python3', which lacked mlx_lm)"
+                )
+            except (OSError, ConfigError) as e:
+                _eprint(f"- could not update config: {e}")
+        else:
+            _eprint(
+                f"- note: server.python_executable ({cfg.server.python_executable}) "
+                f"cannot import mlx_lm; point it at {sys.executable} or install "
+                "mlx-lm there"
+            )
 
     if not fixed_any:
         _eprint("- nothing to fix")

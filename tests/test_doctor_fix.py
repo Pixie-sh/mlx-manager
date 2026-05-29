@@ -48,7 +48,52 @@ def test_doctor_fix_installs_when_bot_runtime_missing(monkeypatch, capsys, cfg_f
     ran = []
     monkeypatch.setattr(cli, "_mlx_lm_install_cmd", lambda: ["echo", "install"])
     monkeypatch.setattr(cli, "_run_fix_cmd", lambda cmd: ran.append(cmd) or 0)
+    # Server python already has mlx_lm, so no repoint.
+    monkeypatch.setattr(cli.srv, "mlx_lm_installed", lambda _py: True)
     cli._doctor_fix(cfg)
     assert ran == [["echo", "install"]]
     err = capsys.readouterr().err
     assert "ok" in err
+
+
+def test_doctor_fix_repoints_server_python_when_default_lacks_mlx_lm(
+    monkeypatch, tmp_path, capsys
+):
+    from mlx_manager.config import load
+
+    cfg_path = tmp_path / "cfg.toml"
+    cfg_path.write_text(
+        '[server]\npython_executable = "python3"\n'
+        'log_file = "{0}/mlx.log"\npid_file = "{0}/mlx.pid"\n'
+        'state_file = "{0}/state.json"\nlock_file = "{0}/mlx.lock"\n'
+        "[models]\ndirectories = []\n".format(tmp_path)
+    )
+    cfg = load(cfg_path)
+    monkeypatch.setattr(cli, "_mlx_lm_importable_here", lambda: True)
+    monkeypatch.setattr(cli.srv, "mlx_lm_installed", lambda _py: False)
+    monkeypatch.setattr(cli.sys, "executable", "/venv/bin/python")
+    cli._doctor_fix(cfg)
+    # Config file updated to the working interpreter.
+    assert load(cfg_path).server.python_executable == "/venv/bin/python"
+    assert "set server.python_executable" in capsys.readouterr().err
+
+
+def test_doctor_fix_advises_when_custom_server_python_lacks_mlx_lm(
+    monkeypatch, tmp_path, capsys
+):
+    from mlx_manager.config import load
+
+    cfg_path = tmp_path / "cfg.toml"
+    cfg_path.write_text(
+        '[server]\npython_executable = "/custom/python"\n'
+        'log_file = "{0}/mlx.log"\npid_file = "{0}/mlx.pid"\n'
+        'state_file = "{0}/state.json"\nlock_file = "{0}/mlx.lock"\n'
+        "[models]\ndirectories = []\n".format(tmp_path)
+    )
+    cfg = load(cfg_path)
+    monkeypatch.setattr(cli, "_mlx_lm_importable_here", lambda: True)
+    monkeypatch.setattr(cli.srv, "mlx_lm_installed", lambda _py: False)
+    cli._doctor_fix(cfg)
+    # Custom value is NOT overwritten; user is advised instead.
+    assert load(cfg_path).server.python_executable == "/custom/python"
+    assert "cannot import mlx_lm" in capsys.readouterr().err
