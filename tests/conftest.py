@@ -95,6 +95,7 @@ def cfg_factory(tmp_path: Path):
             "stop_timeout_seconds": 2,
             "max_log_bytes": 1024,
             "max_log_files": 3,
+            "patch_tool_calls": True,
             "directories": [],
             "default_model": "",
             "aliases": {},
@@ -120,6 +121,7 @@ def cfg_factory(tmp_path: Path):
             stop_timeout_seconds=defaults["stop_timeout_seconds"],
             max_log_bytes=defaults["max_log_bytes"],
             max_log_files=defaults["max_log_files"],
+            patch_tool_calls=defaults["patch_tool_calls"],
         )
         models = ModelsCfg(
             directories=list(defaults["directories"]),

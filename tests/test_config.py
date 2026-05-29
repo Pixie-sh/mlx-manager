@@ -59,3 +59,21 @@ def test_invalid_port_rejected(tmp_path, bad_port):
     cfg_path.write_text(f'[server]\nport = {bad_port}\n')
     with pytest.raises(ConfigError, match=r"port"):
         load(cfg_path)
+
+
+def test_patch_tool_calls_defaults_true(tmp_path):
+    cfg = load(tmp_path / "config.toml")
+    assert cfg.server.patch_tool_calls is True
+
+
+def test_patch_tool_calls_user_override(tmp_path):
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text("[server]\npatch_tool_calls = false\n")
+    assert load(cfg_path).server.patch_tool_calls is False
+
+
+def test_patch_tool_calls_must_be_bool(tmp_path):
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text('[server]\npatch_tool_calls = "yes"\n')
+    with pytest.raises(ConfigError, match=r"patch_tool_calls must be a boolean"):
+        load(cfg_path)

@@ -231,6 +231,50 @@ def test_build_command_returns_cwd_and_serving_id(cfg_factory, fake_lmstudio_roo
     assert cwd == m.path.parent
 
 
+def test_build_command_routes_through_shim_when_patch_enabled(
+    cfg_factory, fake_lmstudio_root
+):
+    cfg = cfg_factory(patch_tool_calls=True)
+    mcfg = ModelsCfg(
+        directories=[str(fake_lmstudio_root)], default_model="", aliases={}
+    )
+    m = next(x for x in discover(mcfg) if x.id == "gemma-test-MLX-4bit")
+    cmd, _cwd, _warnings = srv.build_command(
+        cfg, m, host="127.0.0.1", port=12345, extra_arg_pairs=[], supported_flags=set()
+    )
+    # Launches the shim (not `-m mlx_lm`) but still passes the `server` subcommand.
+    assert str(srv._SERVER_SHIM) in cmd
+    assert "-m" not in cmd
+    assert cmd[cmd.index(str(srv._SERVER_SHIM)) + 1] == "server"
+
+
+def test_build_command_uses_mlx_lm_when_patch_disabled(
+    cfg_factory, fake_lmstudio_root
+):
+    cfg = cfg_factory(patch_tool_calls=False)
+    mcfg = ModelsCfg(
+        directories=[str(fake_lmstudio_root)], default_model="", aliases={}
+    )
+    m = next(x for x in discover(mcfg) if x.id == "gemma-test-MLX-4bit")
+    cmd, _cwd, _warnings = srv.build_command(
+        cfg, m, host="127.0.0.1", port=12345, extra_arg_pairs=[], supported_flags=set()
+    )
+    assert "-m" in cmd and "mlx_lm" in cmd
+    assert str(srv._SERVER_SHIM) not in cmd
+
+
+def test_is_managed_process_recognizes_shim_argv(tmp_path):
+    """A process launched via the patch shim (argv has no literal `mlx_lm`) must
+    still be recognized as managed."""
+    p = _spawn_idle(srv._SERVER_SHIM.name)
+    try:
+        assert srv.pid_alive(p.pid)
+        assert srv.is_managed_process(p.pid, None) is True
+    finally:
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=5)
+
+
 def test_log_rotation_caps_max_files(tmp_path):
     log = tmp_path / "x.log"
     log.write_bytes(b"0" * 4096)

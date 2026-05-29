@@ -228,7 +228,12 @@ def is_managed_process(pid: int, state: State | None = None) -> bool:
     if not pid_alive(pid):
         return False
     cmd = pid_command(pid)
-    if "mlx_lm server" not in cmd and "mlx_lm.server" not in cmd and "mlx_lm" not in cmd:
+    if (
+        "mlx_lm server" not in cmd
+        and "mlx_lm.server" not in cmd
+        and "mlx_lm" not in cmd
+        and _SERVER_SHIM.name not in cmd
+    ):
         return False
     if state is not None:
         if str(state.port) not in cmd:
@@ -470,6 +475,11 @@ def wait_ready(host: str, port: int, timeout: float, *, on_verbose=None) -> bool
 # only when forwarding [server.extra_args] / --extra-arg KEY=VAL pairs.
 _BOOL_FLAGS = {"--trust-remote-code", "--use-default-chat-template", "--pipeline"}
 
+# Launch shim that patches mlx_lm.server (so unparseable tool calls report
+# finish_reason=length) before handing off to mlx_lm's own CLI. Used in place of
+# `-m mlx_lm` when server.patch_tool_calls is enabled. See _server_shim.py.
+_SERVER_SHIM = Path(__file__).with_name("_server_shim.py")
+
 
 def _normalize_extra_args(
     pairs: Iterable[str],
@@ -535,11 +545,12 @@ def build_command(
 ) -> tuple[list[str], Path | None, list[str]]:
     """Return ``(argv, cwd, warnings)`` for the mlx_lm server invocation."""
     serving_id, cwd = serving_invocation(model)
+    if cfg.server.patch_tool_calls:
+        launcher = [cfg.server.python_executable, str(_SERVER_SHIM), "server"]
+    else:
+        launcher = [cfg.server.python_executable, "-m", "mlx_lm", "server"]
     cmd = [
-        cfg.server.python_executable,
-        "-m",
-        "mlx_lm",
-        "server",
+        *launcher,
         "--model",
         serving_id,
         "--host",

@@ -25,6 +25,7 @@ _DEFAULTS: dict[str, Any] = {
         "stop_timeout_seconds": 15,
         "max_log_bytes": 10_485_760,
         "max_log_files": 5,
+        "patch_tool_calls": True,
     },
     "models": {
         "directories": [
@@ -76,6 +77,7 @@ class ServerCfg:
     stop_timeout_seconds: int
     max_log_bytes: int
     max_log_files: int
+    patch_tool_calls: bool = True
 
 
 @dataclass(frozen=True)
@@ -172,6 +174,8 @@ def _validate(raw: dict[str, Any]) -> None:
         for a in server["extra_args"]:
             if not isinstance(a, str):
                 raise ConfigError("server.extra_args entries must be strings")
+    if "patch_tool_calls" in server and not isinstance(server["patch_tool_calls"], bool):
+        raise ConfigError("server.patch_tool_calls must be a boolean")
 
     models = raw.get("models", {})
     if "directories" in models:
@@ -231,6 +235,7 @@ def load(path: str | Path | None = None) -> Config:
             stop_timeout_seconds=int(server["stop_timeout_seconds"]),
             max_log_bytes=int(server["max_log_bytes"]),
             max_log_files=int(server["max_log_files"]),
+            patch_tool_calls=bool(server["patch_tool_calls"]),
         ),
         models=ModelsCfg(
             directories=[str(d) for d in models["directories"]],

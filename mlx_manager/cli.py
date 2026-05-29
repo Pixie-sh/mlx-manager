@@ -671,6 +671,7 @@ def _cmd_config_show(cfg: Config, args: argparse.Namespace) -> int:
                 "stop_timeout_seconds": cfg.server.stop_timeout_seconds,
                 "max_log_bytes": cfg.server.max_log_bytes,
                 "max_log_files": cfg.server.max_log_files,
+                "patch_tool_calls": cfg.server.patch_tool_calls,
             },
             "models": {
                 "directories": cfg.models.directories,
@@ -700,6 +701,7 @@ def _cmd_config_show(cfg: Config, args: argparse.Namespace) -> int:
         print(f"  stop_timeout_seconds      = {cfg.server.stop_timeout_seconds}")
         print(f"  max_log_bytes             = {cfg.server.max_log_bytes}")
         print(f"  max_log_files             = {cfg.server.max_log_files}")
+        print(f"  patch_tool_calls          = {cfg.server.patch_tool_calls}")
         print()
         print("[models]")
         print(f"  directories               = {cfg.models.directories}")

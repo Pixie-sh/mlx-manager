@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Managed servers now launch through a thin shim (`_server_shim.py`) that
+  patches `mlx_lm.server` in memory so a tool call that fails to parse (usually
+  truncated mid-generation) reports `finish_reason="length"` instead of being
+  silently dropped while the response still claims `stop`/`tool_calls` — which
+  left agentic clients with no error signal. The patch is best-effort (the
+  server still starts if `mlx_lm` internals don't match) and never edits the
+  installed package, so it survives `mlx_lm` reinstalls. Toggle with the new
+  `[server].patch_tool_calls` key (default `true`).
 - `LICENSE` (MIT), `CONTRIBUTING.md`, `CHANGELOG.md`, and `.gitignore` for
   open-source housekeeping.
 - README rewritten to document every command, flag, and exit code.
