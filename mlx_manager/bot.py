@@ -70,7 +70,7 @@ def build_system_prompt(
 
 _HELP = (
     "commands: /help  /context (show injected state)  /reset (clear history)  "
-    "/exit (or Ctrl-D)"
+    "/exit (or .exit) (or Ctrl-D)"
 )
 
 # Curated lightweight, instruction-tuned MLX models offered on first run. All
@@ -148,8 +148,7 @@ def choose_model(
     for i, m in enumerate(BOT_MODELS, start=1):
         marker = " (default)" if (i - 1) == default_idx else ""
         out_fn(f"  {i}. {m['label']:<14} {m['size']:<9} — {m['note']}{marker}")
-    out_fn("  or paste any Hugging Face repo id")
-
+    out_fn("  or paste any Hugging Face repo id or local model path")
     answer = input_fn(f"choice [1-{len(BOT_MODELS)}, default {default_idx + 1}]: ").strip()
     if not answer:
         return BOT_MODELS[default_idx]["id"]

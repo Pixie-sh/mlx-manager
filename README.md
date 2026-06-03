@@ -1,5 +1,7 @@
 # mlx-manager
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 A small, stdlib-first Python 3.11+ CLI that wraps `python -m mlx_lm server` so
 you can run a local [MLX](https://github.com/ml-explore/mlx) language-model
 HTTP server *headless* on an Apple Silicon Mac — start, stop, restart, switch
@@ -560,7 +562,7 @@ error.
 ## Development
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/<username>/mlx-manager.git
 cd mlx-manager
 pip install -e '.[dev]'
 pytest -q
