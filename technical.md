@@ -1,12 +1,12 @@
 # mlx-manager — Technical Knowledge Base
 
-> Generated 2026-05-15. Project version 0.1.0. MIT license. Author: rs.
+> Maintainer reference. Project version 0.1.0. MIT license. Author: rs. The README and source code are canonical when details differ.
 
 ---
 
 ## 1. Project Overview
 
-**mlx-manager** is a Python CLI tool (v0.1.0) that wraps `python -m mlx_lm.server` to run a local MLX HTTP server headlessly on Apple Silicon Macs. Designed for SSH-only headless machines where you need to manage local LLM inference without a GUI.
+**mlx-manager** is a Python CLI tool (v0.1.0) that wraps `mlx_lm server` to run a local MLX HTTP server headlessly on Apple Silicon Macs. Designed for SSH-only headless machines where you need to manage local LLM inference without a GUI.
 
 | Attribute | Value |
 |-----------|-------|
@@ -14,9 +14,9 @@
 | Platform | Darwin / arm64 (Apple Silicon only) |
 | License | MIT |
 | Author | rs |
-| Third-party deps | tomli-w only (TOML writing) |
-| Total source | ~2,250 lines across 9 modules |
-| Total tests | ~49 tests across 6 files |
+| Third-party deps | `tomli-w` directly; `mlx_lm` is required in the selected runtime for server/bot usage |
+| Total source | Small focused package across CLI, server, model, provider, benchmark, bot, and shim modules |
+| Total tests | Pytest suite under `tests/` with faked external calls |
 
 ### Design Philosophy
 
@@ -32,13 +32,15 @@
 
 | Module | Lines | Responsibility |
 |--------|-------|---------------|
-| `cli.py` | 786 | Main entry point, argparse dispatch, all command handlers |
-| `config.py` | 196 | TOML loading/writing, validation, defaults |
+| `cli.py` | ~1,400 | Main entry point, argparse dispatch, all command handlers |
+| `config.py` | ~260 | TOML loading/writing, validation, defaults |
 | `models.py` | 149 | Model discovery (filesystem + HF cache + aliases) |
 | `paths.py` | 23 | Path expansion (~ and $VAR) |
 | `providers.py` | 177 | OpenCode/Claude Code/LiteLLM snippet generation |
-| `server.py` | 655 | Process lifecycle, PID management, locks, log rotation |
+| `server.py` | ~850 | Process lifecycle, PID management, locks, log rotation |
 | `benchmark.py` | 259 | Performance measurement (TTFT, decode tok/s, throughput) |
+| `bot.py` | ~320 | In-process troubleshooting chat with cached local model selection |
+| `_server_shim.py` | small | Best-effort shim for truncated tool-call finish reasons |
 
 ### Data Flow
 
@@ -75,13 +77,15 @@ BenchmarkSummary(endpoint, model, requests_total, requests_ok, concurrency, wall
 |---------|---------|-----------|------------|
 | `list` | Show discovered models | `--json` | 0, 3 |
 | `start` | Launch server | `--model`, `--host`, `--port`, `--replace`, `--bind-all`, `--extra-arg` | 0, 5, 6, 7 |
+| `load` | Guided start from discovered models | `--host`, `--port`, `--replace`, `--bind-all`, `--extra-arg` | 0, 2, 3, 5, 6, 7 |
 | `stop` | Stop managed server | `--timeout` | 0, 4 |
 | `restart` | Stop + start | same as start | 0, 6, 7 |
 | `status` | Report current state | `--json` | 0, 4 |
 | `logs` | Tail server log | `--tail`, `-f` | 0, 4 |
 | `config opencode` | Print provider snippet | `--model`, `--format`, `--apply`, `--overwrite` | 0, 3 |
 | `config claude-code` | Print Claude/LiteLLM snippet | `--model` | 0, 3 |
-| `doctor` | Run diagnostics | `--json` | 0, 1 |
+| `doctor` | Run diagnostics and optional safe fixes | `--json`, `--fix` | 0, 1 |
+| `bot` | Chat with a local troubleshooting assistant | `--model`, `--choose`, `--max-tokens`, `--temperature`, `--no-context` | 0, 1, 7 |
 | `benchmark` | Measure performance | `--model`, `--endpoint`, `--prompt`, `--max-tokens`, `--requests`, `--concurrency`, `--warmup`, `--json` | 0, 1 |
 
 ### Exit Code Reference
@@ -121,9 +125,12 @@ startup_timeout_seconds = 120    # Max wait for server readiness
 stop_timeout_seconds = 15        # SIGTERM wait before SIGKILL
 max_log_bytes = 10485760         # 10 MiB rotation threshold
 max_log_files = 5                # Kept rotated log files
+patch_tool_calls = true          # Best-effort shim for truncated tool calls
 
 [models]
 directories = [                  # Roots to scan for models
+  "~/.mlx-manager/models",
+  "~/.models/mlx",
   "~/models/mlx",
   "~/.cache/huggingface/hub",
   "~/.lmstudio/models",
@@ -137,6 +144,12 @@ default_model = ""               # Auto-select on start without --model
 base_url = ""                    # Empty → derived from server.host:port
 api_key = "mlx-local"            # Dummy key for local provider
 provider_name = "mlx-local"      # Provider label
+
+[bot]
+model = "mlx-community/gemma-4-e2b-it-4bit"
+cache_dir = "~/.mlx-manager/bot"
+max_tokens = 1024
+temperature = 0.7
 ```
 
 ### Validation Rules
@@ -413,14 +426,9 @@ Claude Code doesn't document OpenAI-compatible base-URL routing (verified May 20
    - Auto-start on user login
    - `bootstrap`/`bootout` via `launchctl`
 
-2. **mlx_lm module name change**
-   - Currently uses deprecated `python -m mlx_lm.server` form
-   - Future mlx-lm may drop hyphenated module form
-   - Will need to swap to `python -m mlx_lm server` in `server.py:build_command`
-
 ### Out of Scope (Explicitly Not Built)
 
-- Model downloading
+- Serving-model downloading (the bot may download its own assistant model once)
 - Authentication
 - Multi-tenancy
 - Web UI
@@ -434,12 +442,11 @@ Claude Code doesn't document OpenAI-compatible base-URL routing (verified May 20
 
 ## 12. Assumptions & Verified Facts
 
-### Verified at Build Time
+### Historical Build-Time Notes
 
-- `python3 --version` reported 3.12.6
-- `python3 -m mlx_lm.server --help` exits 0; known long flags recorded
-- `~/.config/opencode/opencode.json` exists; emitted provider block matches its schema
-- `claude --version` reports 2.1.128; OpenAI-compatible base URL support not documented
+- Initial development verified Python and `mlx_lm server --help` locally.
+- Claude Code OpenAI-compatible base URL routing was not documented at initial
+  release time; README documents the LiteLLM fallback path.
 
 ### Design Assumptions
 
@@ -447,7 +454,8 @@ Claude Code doesn't document OpenAI-compatible base-URL routing (verified May 20
 - `mlx_lm` is installed in the same interpreter mlx-manager uses
 - SSH-only headless access pattern
 - Single-user scenario (no multi-tenancy)
-- Models are pre-loaded locally (no downloading)
+- Serving models are pre-loaded locally; the bot assistant model may download once
+  into `[bot].cache_dir`.
 
 ---
 
@@ -457,24 +465,20 @@ Claude Code doesn't document OpenAI-compatible base-URL routing (verified May 20
 mlx-manager/
 ├── pyproject.toml          # Build config, dependencies, entry point
 ├── README.md               # User documentation
-├── prompt.md               # Original design brief (323 lines)
 ├── mlx_manager/
 │   ├── __init__.py         # Version string
 │   ├── __main__.py         # python -m mlx_manager entry
-│   ├── cli.py              # CLI dispatch, all command handlers (621 lines)
-│   ├── config.py           # TOML config loading/writing (196 lines)
-│   ├── models.py           # Model discovery + resolution (149 lines)
-│   ├── paths.py            # Path expansion utilities (23 lines)
-│   ├── providers.py        # Provider snippet generation (177 lines)
-│   ├── server.py           # Process lifecycle management (634 lines)
-│   └── benchmark.py        # Performance benchmarking (259 lines)
+│   ├── cli.py              # CLI dispatch and command handlers
+│   ├── config.py           # TOML config loading/writing
+│   ├── models.py           # Model discovery + resolution
+│   ├── paths.py            # Path expansion utilities
+│   ├── providers.py        # Provider snippet generation
+│   ├── server.py           # Process lifecycle management
+│   ├── benchmark.py        # Performance benchmarking
+│   ├── bot.py              # Local troubleshooting assistant
+│   └── _server_shim.py     # Tool-call finish-reason shim
 ├── tests/
-│   ├── conftest.py         # Shared fixtures (137 lines)
-│   ├── test_config.py      # Config tests (61 lines)
-│   ├── test_models.py      # Discovery tests (109 lines)
-│   ├── test_server_safety.py # Safety tests (249 lines)
-│   ├── test_providers.py   # Provider tests (172 lines)
-│   ├── test_cli_json.py    # CLI JSON tests (106 lines)
-│   └── test_benchmark.py   # Benchmark tests (155 lines)
-└── mlx_manager.egg-info/   # setuptools build artifacts
+│   ├── conftest.py         # Shared fixtures
+│   └── test_*.py           # Config, model, server, provider, CLI, bot, health, shim, and benchmark tests
+└── CHANGELOG.md            # Release notes
 ```

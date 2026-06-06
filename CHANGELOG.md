@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `load` command: a guided shortcut for starting from the discovered local model
+  list. It prints numbered models, then prompts for host, port, whether to
+  replace an existing managed server, and whether to apply the OpenCode
+  provider config in one go (defaults to no). If you opt in, three follow-up
+  prompts let you pick the OpenCode config path, choose merge vs overwrite
+  (i.e. reset the whole provider block), and optionally also print a Claude
+  Code (LiteLLM) snippet to stdout. The same stepper is available as
+  `start --choose`. Pass `--update-opencode` (and optionally `--opencode-target
+  /path/to/opencode.json` / `--overwrite`) on the CLI to skip the prompts and
+  apply silently.
+- `config opencode --choose`: same set of interactive prompts (target,
+  merge/overwrite, Claude Code snippet) for users who already have a server
+  running and just want to apply or reset the provider config. Implies
+  `--apply` so a single command goes from "I have a server" to "OpenCode is
+  configured" without remembering the flag combinations.
+- `~/.models/mlx` is now a default discovery root, matching common local model
+  paths such as `~/.models/mlx/Qwopus3.6-27B-v2-MLX-4bit`.
 - Managed servers now launch through a thin shim (`_server_shim.py`) that
   patches `mlx_lm.server` in memory so a tool call that fails to parse (usually
   truncated mid-generation) reports `finish_reason="length"` instead of being
@@ -50,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - `pyproject.toml` now declares classifiers, keywords, and project URLs.
+- OpenCode provider keys emitted by `config opencode` are now prefixed with
+  `mlx-manager:` and suffixed with the port (e.g. `mlx-manager:mlx-local:8080`)
+  so every mlx-manager-managed block is identifiable. `--apply` opportunistically
+  migrates a legacy bare key (e.g. `mlx-local`) when its `options.baseURL`
+  matches the new block's `baseURL`, so existing setups upgrade without
+  duplicate provider entries; user-curated bare keys pointing at a different
+  backend are left untouched. Use `config opencode --reset` to wipe and
+  re-apply if you want a fully fresh install.
+
+### Removed
+- Internal prompt and stakeholder summary artifacts from the public release file
+  set; they remain ignored for local regeneration.
 
 ### Fixed
 - `benchmark` request table now shows the request index in the `#` column
@@ -57,6 +86,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed a handful of unused imports (`field`, `Iterable`, `Any`, `sys`).
 - `mlx-manager list` now reuses `_human_size` for directory sizes instead
   of duplicating the formatting logic.
+- `--host 0.0.0.0` now exits with usage error unless `--bind-all` is also
+  provided, matching the documented network exposure safety rule. The same
+  guard applies when `[server].host = "0.0.0.0"` is set in `config.toml`:
+  starting a server now requires explicit `--bind-all` each invocation so
+  network exposure is never inherited from a stale config edit. To restore
+  the previous behavior, switch the config back to `127.0.0.1` and pass
+  `--bind-all` on the runs that should be reachable.
 
 ## [0.1.0] - 2026-05
 

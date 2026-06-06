@@ -101,6 +101,95 @@ def test_config_opencode_emits_json(tmp_path, monkeypatch, capsys, fake_models_r
     assert rc == 0
     doc = json.loads(out)
     assert "provider" in doc
+    assert "mlx-manager:mlx-local:8080" in doc["provider"]
+
+
+def test_config_opencode_running_single_server_name_includes_port(tmp_path, monkeypatch, capsys):
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        '[server]\nlog_file = "{0}/mlx.log"\npid_file = "{0}/mlx.pid"\n'
+        'state_file = "{0}/state.json"\nlock_file = "{0}/mlx.lock"\n'.format(tmp_path)
+    )
+    monkeypatch.setattr(
+        cli.srv,
+        "list_running_states",
+        lambda cfg_obj: [
+            cli.srv.State(
+                pid=123,
+                model_alias="qwen3-8b-4bit",
+                model_path="/tmp/qwen3-8b-4bit",
+                host="127.0.0.1",
+                port=18081,
+                base_url="http://127.0.0.1:18081/v1",
+                command=["python3", "-m", "mlx_lm", "server"],
+                started_at="2026-01-01T00:00:00Z",
+                python_executable=cfg_obj.server.python_executable,
+            )
+        ],
+    )
+    rc, out, _ = _run(monkeypatch, capsys, ["config", "opencode"], config_path=cfg)
+    assert rc == 0
+    doc = json.loads(out)
+    assert "mlx-manager:mlx-local:18081" in doc["provider"]
+
+
+def test_config_opencode_choose_prompts_and_applies(
+    tmp_path, monkeypatch, capsys, fake_models_root
+):
+    cfg = tmp_path / "cfg.toml"
+    target = tmp_path / "opencode.json"
+    cfg.write_text(
+        '[models]\ndirectories = ["{r}"]\ndefault_model = "qwen3-8b-4bit"\n\n'
+        '[server]\nlog_file = "{t}/mlx.log"\npid_file = "{t}/mlx.pid"\n'
+        'state_file = "{t}/state.json"\nlock_file = "{t}/mlx.lock"\n'.format(
+            r=fake_models_root, t=tmp_path
+        )
+    )
+
+    answers = iter([str(target), "o", "y"])  # target, overwrite, claude-code
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    rc, out, _ = _run(
+        monkeypatch,
+        capsys,
+        ["config", "opencode", "--choose"],
+        config_path=cfg,
+    )
+    assert rc == 0
+    assert target.exists()
+    assert "Claude Code (LiteLLM) snippet" in out
+    doc = json.loads(target.read_text())
+    keys = list(doc["provider"].keys())
+    assert any(k.startswith("mlx-manager:") for k in keys)
+
+
+def test_config_opencode_reset_clears_managed_providers(tmp_path, monkeypatch, capsys):
+    cfg = tmp_path / "cfg.toml"
+    target = tmp_path / "opencode.json"
+    cfg.write_text(
+        '[server]\nlog_file = "{0}/mlx.log"\npid_file = "{0}/mlx.pid"\n'
+        'state_file = "{0}/state.json"\nlock_file = "{0}/mlx.lock"\n'.format(tmp_path)
+    )
+    target.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "mlx-manager:mlx-local:8080": {"npm": "remove"},
+                    "anthropic": {"npm": "keep"},
+                }
+            }
+        )
+    )
+    rc, out, err = _run(
+        monkeypatch,
+        capsys,
+        ["config", "opencode", "--reset", "--target", str(target)],
+        config_path=cfg,
+    )
+    assert rc == 0
+    assert err == ""
+    assert "1 mlx-manager provider(s) removed" in out
+    assert json.loads(target.read_text())["provider"] == {"anthropic": {"npm": "keep"}}
 
 
 def test_stop_when_nothing_running_exits_4(tmp_path, monkeypatch, capsys):

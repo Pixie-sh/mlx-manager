@@ -29,6 +29,7 @@ No daemon. No database. No web UI. Just `argparse`, a single state file, an
 - [Commands](#commands)
   - [`list`](#list)
   - [`start`](#start)
+  - [`load`](#load)
   - [`stop`](#stop)
   - [`restart`](#restart)
   - [`switch`](#switch)
@@ -36,6 +37,7 @@ No daemon. No database. No web UI. Just `argparse`, a single state file, an
   - [`logs`](#logs)
   - [`info`](#info)
   - [`doctor`](#doctor)
+  - [`bot`](#bot)
   - [`benchmark`](#benchmark)
   - [`config opencode`](#config-opencode)
   - [`config claude-code`](#config-claude-code)
@@ -85,7 +87,7 @@ named by `[server].python_executable` in your config.
 ```bash
 mlx-manager doctor                # check Python, mlx_lm, paths, port
 mlx-manager list                  # see discovered models
-mlx-manager start --model <id>    # launch server on 127.0.0.1:8080
+mlx-manager load                  # guided local model picker and start steps
 mlx-manager status                # see live PID, uptime, endpoint
 mlx-manager benchmark             # TTFT, decode tok/s, aggregate throughput
 mlx-manager stop
@@ -121,9 +123,12 @@ startup_timeout_seconds = 120
 stop_timeout_seconds = 15
 max_log_bytes = 10485760         # 10 MiB
 max_log_files = 5
+patch_tool_calls = true          # best-effort shim for truncated tool calls
 
 [models]
 directories = [
+  "~/.mlx-manager/models",
+  "~/.models/mlx",
   "~/models/mlx",
   "~/.cache/huggingface/hub",
   "~/.lmstudio/models",
@@ -137,10 +142,17 @@ default_model = ""
 base_url = ""                    # if empty, derived from [server].host:port
 api_key = "mlx-local"
 provider_name = "mlx-local"
+
+[bot]
+model = "mlx-community/gemma-4-e2b-it-4bit"
+cache_dir = "~/.mlx-manager/bot"
+max_tokens = 1024
+temperature = 0.7
 ```
 
 Validation: unknown tables or keys → exit code 3; `port` must be in
-`1024–65535`; `extra_args`, `directories` and `aliases` are type-checked.
+`1024–65535`; `extra_args`, `directories`, `aliases`, `patch_tool_calls`,
+and `[bot]` values are type-checked.
 
 Aliases pointing at non-existent paths are tolerated at load time (so a model
 can be temporarily unavailable without breaking `mlx-manager`); `doctor`
@@ -178,6 +190,10 @@ to disambiguate.
 `mlx-manager start --model X` resolves `X` in this order: alias → discovered
 display name → absolute filesystem path.
 
+`mlx-manager load` is the guided shortcut form for local models. It prints the
+current discovered model list, asks which model to start, then steps through
+host, port, and whether to replace an existing managed server on that port.
+
 ---
 
 ## Commands
@@ -199,8 +215,8 @@ Sample output:
 
 ```
 ID                SOURCE    WEIGHTS  SIZE   PATH
-qwen3-8b-4bit     directory 1        4.5GB  /Users/me/models/mlx/qwen3-8b-4bit
-mlx-community/... hf_cache  1        7.2GB  /Users/me/.cache/huggingface/hub/...
+qwen3-8b-4bit     directory 1        4.5GB  ~/models/mlx/qwen3-8b-4bit
+mlx-community/... hf_cache  1        7.2GB  ~/.cache/huggingface/hub/...
 ```
 
 ### `start`
@@ -213,6 +229,7 @@ mlx-manager start --model qwen3-8b-4bit --port 1234
 mlx-manager start --model /abs/path/to/model --replace
 mlx-manager start --model qwen3-8b-4bit --extra-arg trust-remote-code=true
 mlx-manager start --model qwen3-8b-4bit --bind-all     # bind on 0.0.0.0
+mlx-manager start --choose                             # guided model picker
 ```
 
 | Flag | Description |
@@ -221,11 +238,28 @@ mlx-manager start --model qwen3-8b-4bit --bind-all     # bind on 0.0.0.0
 | `--host HOST` | Override `[server].host`. |
 | `--port N` | Override `[server].port`. |
 | `--replace` | Stop a running managed server first instead of erroring. |
+| `--choose` | Pick from the discovered model list and prompt for missing start options. |
 | `--bind-all` | Bind on `0.0.0.0` (prints a warning). |
 | `--extra-arg KEY=VAL` | Forward an extra flag to `mlx_lm server`. Repeatable. Boolean flags accept `true/yes/1/on`. Unknown flags are warned about based on the locally-installed `mlx_lm server --help` output. |
 
 On success prints the PID, model id/path, base URL, and log file path. On
 startup-timeout the launcher prints the tail of the log and exits 6.
+
+### `load`
+
+Guided shortcut for launching one discovered local model. It uses the same
+server start path as `start`, but instead of making you type the full command,
+it shows the current model list and prompts for the missing choices.
+
+```bash
+mlx-manager load
+mlx-manager load --port 1237 --bind-all
+mlx-manager load --bind-all --replace
+```
+
+| Flag | Description |
+|------|-------------|
+| `--host`, `--port`, `--replace`, `--bind-all`, `--extra-arg` | Same as [`start`](#start). If omitted, `load` prompts for host, port, and replace behavior. |
 
 ### `stop`
 
@@ -330,11 +364,13 @@ whenever something looks off.
 ```bash
 mlx-manager doctor
 mlx-manager doctor --json
+mlx-manager doctor --fix
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--json` | Emit results as a JSON array. |
+| `--fix` | Attempt safe remediations and write progress to stderr. |
 
 Checks performed:
 
@@ -348,8 +384,41 @@ Checks performed:
 - Platform is `Darwin/arm64`.
 - Total physical memory (via `sysctl hw.memsize`).
 - `pf` firewall state.
+- The current `mlx-manager` runtime can import `mlx_lm` for the in-process
+  [`bot`](#bot) command.
 
 Exits `1` if any check is `FAIL`, otherwise `0`.
+
+With `--fix`, `doctor` attempts only local, reversible setup work: install
+`mlx_lm` into the bot runtime, create missing configured model directories,
+and repoint the default `server.python_executable` to the current interpreter
+when that interpreter can import `mlx_lm` but `python3` cannot. Fix progress is
+printed to stderr so `--json` output stays parseable.
+
+### `bot`
+
+Chat with a small on-device troubleshooting assistant. The bot runs `mlx_lm`
+in the current `mlx-manager` Python process, injects live `status`, `doctor`,
+and recent-log context by default, and downloads its model once into
+`[bot].cache_dir` for later reuse.
+
+```bash
+mlx-manager bot
+mlx-manager bot --choose
+mlx-manager bot --model mlx-community/Qwen3-1.7B-4bit
+mlx-manager bot --no-context
+```
+
+| Flag | Description |
+|------|-------------|
+| `--model ID_OR_PATH` | Override `[bot].model` for this run. |
+| `--choose` | Re-pick from the built-in lightweight model menu. |
+| `--max-tokens N` | Override `[bot].max_tokens`. |
+| `--temperature N` | Override `[bot].temperature`. |
+| `--no-context` | Do not inject live server, doctor, or log context. |
+
+If `mlx_lm` is not importable in the current interpreter, `bot` exits `7` and
+suggests `mlx-manager doctor --fix`.
 
 ### `benchmark`
 
@@ -420,6 +489,7 @@ mlx-manager config opencode --model qwen3-8b-4bit
 mlx-manager config opencode --format full              # full opencode.json shape
 mlx-manager config opencode --apply                    # merge into ~/.config/opencode/opencode.json
 mlx-manager config opencode --apply --overwrite        # replace the provider block
+mlx-manager config opencode --reset                    # remove mlx-manager-managed provider blocks
 mlx-manager config opencode --apply --target /path/to/opencode.json
 mlx-manager config opencode --remote                   # use LAN IP, suffix provider name with @hostname
 ```
@@ -429,8 +499,9 @@ mlx-manager config opencode --remote                   # use LAN IP, suffix prov
 | `--model ID` | Model id for the snippet (default: running server, then first discovered, then `[models].default_model`). |
 | `--format merge\|full` | `merge` (default) emits just the `provider` map; `full` wraps it in a complete `opencode.json` with `$schema`. |
 | `--apply` | Write into the file instead of stdout. A `<file>.bak` is created. |
-| `--target PATH` | OpenCode config path (default `~/.config/opencode/opencode.json`). Only meaningful with `--apply`. |
+| `--target PATH` | OpenCode config path (default `~/.config/opencode/opencode.json`). Used with `--apply` or `--reset`. |
 | `--overwrite` | Replace the entire provider block. Without it, `--apply` *merges*: `npm`/`name`/`options` are refreshed and missing model entries added, but hand-tuned per-model fields (e.g. `"limit": { "context": ..., "output": ... }`) are preserved. Other top-level keys in `opencode.json` (`permission`, `mcp`, `plugin`, ...) are untouched. |
+| `--reset` | Remove only provider keys marked with the `mlx-manager:` prefix from the target OpenCode config. User-managed providers are preserved. |
 | `--remote` | Use this machine's LAN IP instead of `127.0.0.1`/`0.0.0.0` in the emitted URL and suffix the provider name with `@<hostname>`. Useful when generating a config for clients on the same network. |
 
 Sample snippet (`merge` form):
@@ -438,7 +509,7 @@ Sample snippet (`merge` form):
 ```json
 {
   "provider": {
-    "mlx-local": {
+    "mlx-manager:mlx-local:8080": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "MLX Local",
       "options": {
@@ -455,7 +526,18 @@ Sample snippet (`merge` form):
 
 If a server is currently running, the snippet's `baseURL` is taken from the
 live state; otherwise it falls back to `[providers].base_url` and finally to
-`[server].host:port`.
+`[server].host:port`. OpenCode provider keys are marked with `mlx-manager:`
+and always include the port, such as `mlx-manager:mlx-local:8080`, so reset can
+identify every mlx-manager-managed entry consistently.
+
+**Migrating from an earlier version.** Pre-`mlx-manager:` releases wrote a
+bare `mlx-local` provider block. On `--apply`, mlx-manager now opportunistically
+removes any legacy bare key whose `options.baseURL` matches the new block's
+`baseURL` — so a previously-managed provider migrates cleanly to the new
+key without leaving a stale duplicate. A bare `mlx-local` block that points
+at a different backend (e.g. LiteLLM on a different port) is treated as
+user-curated and left in place. If you'd rather start fresh, run
+`config opencode --reset` before `--apply`.
 
 ### `config claude-code`
 
@@ -536,7 +618,8 @@ error.
 ## Safety notes
 
 - The default bind is `127.0.0.1`. Binding `0.0.0.0` requires `--bind-all`
-  and prints a warning to stderr.
+  and prints a warning to stderr. Passing `--host 0.0.0.0` without
+  `--bind-all` exits with usage error `2`.
 - `stop` never kills a PID without first confirming its `argv` contains
   `mlx_lm` *and* the recorded port — so a recycled PID belonging to some
   other program will not be touched.
@@ -562,15 +645,14 @@ error.
 ## Development
 
 ```bash
-git clone https://github.com/<username>/mlx-manager.git
+git clone https://github.com/Pixie-sh/mlx-manager.git
 cd mlx-manager
 pip install -e '.[dev]'
 pytest -q
 ```
 
 Tests run without `mlx_lm` installed and without starting a real server
-(every external call is faked through `tests/conftest.py`). 49 tests
-currently pass.
+(every external call is faked through `tests/conftest.py`).
 
 The codebase is intentionally small and stdlib-only on the runtime path; if
 you find a place where a tiny helper is more readable than another

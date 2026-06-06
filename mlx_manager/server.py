@@ -218,6 +218,15 @@ def pid_command(pid: int) -> str:
     return out.stdout.strip()
 
 
+def _looks_like_mlx_lm_server_command(cmd: str) -> bool:
+    return (
+        "mlx_lm server" in cmd
+        or "mlx_lm.server" in cmd
+        or "mlx_lm" in cmd
+        or _SERVER_SHIM.name in cmd
+    )
+
+
 def is_managed_process(pid: int, state: State | None = None) -> bool:
     """True if *pid* is alive and its argv looks like a managed mlx_lm server.
 
@@ -228,12 +237,7 @@ def is_managed_process(pid: int, state: State | None = None) -> bool:
     if not pid_alive(pid):
         return False
     cmd = pid_command(pid)
-    if (
-        "mlx_lm server" not in cmd
-        and "mlx_lm.server" not in cmd
-        and "mlx_lm" not in cmd
-        and _SERVER_SHIM.name not in cmd
-    ):
+    if not _looks_like_mlx_lm_server_command(cmd):
         return False
     if state is not None:
         if str(state.port) not in cmd:
@@ -398,6 +402,13 @@ _FATAL_LOG_PATTERNS: list[tuple[re.Pattern[str], Any]] = [
     (
         re.compile(r"(?:metal::|Metal).{0,80}?out of memory|out of memory", re.IGNORECASE),
         lambda m: "ran out of memory while loading the model",
+    ),
+    (
+        re.compile(
+            r"\[METAL\].{0,160}?(?:Insufficient Memory|OutOfMemory|kIOGPUCommandBufferCallbackErrorOutOfMemory)",
+            re.IGNORECASE,
+        ),
+        lambda m: "ran out of Metal/unified memory; reduce prompt cache, concurrency, or context size and restart",
     ),
     (
         re.compile(r"SafetensorError|HeaderTooLarge|Error while deserializing header"),
@@ -722,7 +733,7 @@ def stop(cfg: Config, *, port: int | None = None, timeout: int | None = None) ->
         raise ServerError("no managed server is running", exit_code=4)
 
     cmd = pid_command(state.pid)
-    if "mlx_lm" not in cmd:
+    if not _looks_like_mlx_lm_server_command(cmd):
         raise ServerError(
             f"pid {state.pid} is alive but does not look like mlx_lm server "
             f"(command: {cmd!r}); refusing to kill",
@@ -794,9 +805,7 @@ def status_dict(cfg: Config, port: int | None = None) -> dict[str, Any]:
             uptime = int((datetime.now(timezone.utc) - t0).total_seconds())
         except ValueError:
             uptime = 0
-    health, health_detail = (
-        log_health(port_log_path(cfg, state.port)) if managed else ("ok", "")
-    )
+    health, health_detail = log_health(port_log_path(cfg, state.port))
     return {
         **state.to_dict(),
         "running": managed,
@@ -828,9 +837,7 @@ def all_status_dicts(cfg: Config) -> list[dict[str, Any]]:
                 uptime = int((datetime.now(timezone.utc) - t0).total_seconds())
             except ValueError:
                 uptime = 0
-        health, health_detail = (
-            log_health(port_log_path(cfg, state.port)) if managed else ("ok", "")
-        )
+        health, health_detail = log_health(port_log_path(cfg, state.port))
         results.append({
             **state.to_dict(),
             "running": managed,

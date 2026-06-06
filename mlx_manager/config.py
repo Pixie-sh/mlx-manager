@@ -26,10 +26,13 @@ _DEFAULTS: dict[str, Any] = {
         "max_log_bytes": 10_485_760,
         "max_log_files": 5,
         "patch_tool_calls": True,
+        "max_context_tokens": 0,
+        "prompt_cache_fraction": 0.5,
     },
     "models": {
         "directories": [
             "~/.mlx-manager/models",
+            "~/.models/mlx",
             "~/models/mlx",
             "~/.cache/huggingface/hub",
             "~/.lmstudio/models",
@@ -78,6 +81,8 @@ class ServerCfg:
     max_log_bytes: int
     max_log_files: int
     patch_tool_calls: bool = True
+    max_context_tokens: int = 0
+    prompt_cache_fraction: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -176,6 +181,14 @@ def _validate(raw: dict[str, Any]) -> None:
                 raise ConfigError("server.extra_args entries must be strings")
     if "patch_tool_calls" in server and not isinstance(server["patch_tool_calls"], bool):
         raise ConfigError("server.patch_tool_calls must be a boolean")
+    if "max_context_tokens" in server:
+        mct = server["max_context_tokens"]
+        if not isinstance(mct, int) or mct < 0:
+            raise ConfigError("server.max_context_tokens must be a non-negative int (0 = auto)")
+    if "prompt_cache_fraction" in server:
+        pcf = server["prompt_cache_fraction"]
+        if not isinstance(pcf, (int, float)) or not (0.0 < float(pcf) <= 1.0):
+            raise ConfigError("server.prompt_cache_fraction must be a number in (0.0, 1.0]")
 
     models = raw.get("models", {})
     if "directories" in models:
@@ -236,6 +249,8 @@ def load(path: str | Path | None = None) -> Config:
             max_log_bytes=int(server["max_log_bytes"]),
             max_log_files=int(server["max_log_files"]),
             patch_tool_calls=bool(server["patch_tool_calls"]),
+            max_context_tokens=int(server["max_context_tokens"]),
+            prompt_cache_fraction=float(server["prompt_cache_fraction"]),
         ),
         models=ModelsCfg(
             directories=[str(d) for d in models["directories"]],

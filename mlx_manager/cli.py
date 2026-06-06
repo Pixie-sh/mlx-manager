@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from mlx_manager import __version__
 from mlx_manager import benchmark as bench
@@ -23,14 +23,17 @@ from mlx_manager.config import (
     load,
     update_value,
 )
-from mlx_manager.models import discover, resolve
+from mlx_manager.context import model_memory_plan, wired_limit_mb
+from mlx_manager.models import Model, discover, resolve
 from mlx_manager.paths import ensure_parent, expand
 from mlx_manager.providers import (
     ApplyError,
     ProviderContext,
     apply_opencode,
     claude_code_snippet,
+    managed_provider_name,
     opencode_snippet,
+    reset_opencode,
 )
 from mlx_manager import server as srv
 
@@ -43,6 +46,47 @@ EXIT_NOT_RUNNING = 4
 EXIT_ALREADY_RUNNING = 5
 EXIT_STARTUP_TIMEOUT = 6
 EXIT_MLX_LM_MISSING = 7
+
+# Canonical TCP port range — mirrors config.py:_validate (server.port).
+_PORT_MIN = 1024
+_PORT_MAX = 65535
+
+# Default OpenCode config path used by ``start --update-opencode`` (and friends)
+# when ``--opencode-target`` is not supplied. Mirrors the default in the
+# ``config opencode --target`` flag so the two surfaces stay in sync.
+_DEFAULT_OPENCODE_TARGET = "~/.config/opencode/opencode.json"
+
+
+def _opencode_lock_path(target: Path) -> Path:
+    """Return the fcntl lock path used to serialize OpenCode config writes."""
+    target = Path(target)
+    return target.with_name(target.name + ".lock")
+
+
+def _add_update_opencode_flags(sp: argparse.ArgumentParser) -> None:
+    """Add the shared `--update-opencode` / `--overwrite` / `--opencode-target` flags."""
+    sp.add_argument("--update-opencode", action="store_true", help="apply OpenCode provider config after start")
+    sp.add_argument("--overwrite", action="store_true", help="replace provider block instead of merging (with --update-opencode)")
+    sp.add_argument(
+        "--opencode-target",
+        default=_DEFAULT_OPENCODE_TARGET,
+        help=f"OpenCode config path to update (default: {_DEFAULT_OPENCODE_TARGET})",
+    )
+
+
+def _port_arg(s: str) -> int:
+    """argparse type: accept a TCP port string in ``[_PORT_MIN, _PORT_MAX]``."""
+    try:
+        port = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"port must be an integer between {_PORT_MIN} and {_PORT_MAX} (got {s!r})"
+        )
+    if not (_PORT_MIN <= port <= _PORT_MAX):
+        raise argparse.ArgumentTypeError(
+            f"port must be between {_PORT_MIN} and {_PORT_MAX} (got {port})"
+        )
+    return port
 
 
 def _eprint(msg: str) -> None:
@@ -118,7 +162,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("start", help="start the MLX server")
     sp.add_argument("--model", help="model id, alias, or absolute path")
     sp.add_argument("--host", help="override server host")
-    sp.add_argument("--port", type=int, help="override server port")
+    sp.add_argument("--port", type=_port_arg, help="override server port")
+    sp.add_argument("--replace", action="store_true", help="stop running server first")
+    sp.add_argument("--choose", action="store_true", help="pick model, host, and port interactively")
+    sp.add_argument("--bind-all", action="store_true", help="bind on 0.0.0.0 (insecure)")
+    sp.add_argument(
+        "--extra-arg",
+        action="append",
+        default=[],
+        metavar="KEY=VAL",
+        help="forward extra flag to mlx_lm server (repeatable)",
+    )
+    _add_update_opencode_flags(sp)
+
+    sp = sub.add_parser("load", help="guided start from the discovered local model list")
+    sp.add_argument("--host", help="override server host")
+    sp.add_argument("--port", type=_port_arg, help="override server port")
     sp.add_argument("--replace", action="store_true", help="stop running server first")
     sp.add_argument("--bind-all", action="store_true", help="bind on 0.0.0.0 (insecure)")
     sp.add_argument(
@@ -128,22 +187,24 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VAL",
         help="forward extra flag to mlx_lm server (repeatable)",
     )
+    _add_update_opencode_flags(sp)
 
     sp = sub.add_parser("stop", help="stop the managed server")
-    sp.add_argument("--port", type=int, help="port of server to stop (required when multiple are running)")
+    sp.add_argument("--port", type=_port_arg, help="port of server to stop (required when multiple are running)")
     sp.add_argument("--timeout", type=int, help="seconds to wait for SIGTERM before SIGKILL")
 
     sp = sub.add_parser("restart", help="stop then start the server")
     sp.add_argument("--model", help="model id, alias, or absolute path")
     sp.add_argument("--host")
-    sp.add_argument("--port", type=int)
+    sp.add_argument("--port", type=_port_arg)
     sp.add_argument("--bind-all", action="store_true")
     sp.add_argument("--extra-arg", action="append", default=[], metavar="KEY=VAL")
+    _add_update_opencode_flags(sp)
 
     sp = sub.add_parser("switch", help="swap running server to a different model")
     sp.add_argument("model", help="new model id, alias, or absolute path")
     sp.add_argument("--host", help="override server host")
-    sp.add_argument("--port", type=int, help="override server port")
+    sp.add_argument("--port", type=_port_arg, help="override server port")
     sp.add_argument("--bind-all", action="store_true", help="bind on 0.0.0.0 (insecure)")
     sp.add_argument(
         "--extra-arg",
@@ -152,13 +213,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VAL",
         help="forward extra flag to mlx_lm server (repeatable)",
     )
+    _add_update_opencode_flags(sp)
 
     sp = sub.add_parser("status", help="report server state")
-    sp.add_argument("--port", type=int, help="show status for a specific port only")
+    sp.add_argument("--port", type=_port_arg, help="show status for a specific port only")
     sp.add_argument("--json", action="store_true", dest="as_json")
 
     sp = sub.add_parser("logs", help="tail server log")
-    sp.add_argument("--port", type=int, help="port of server whose log to tail (required when multiple are running)")
+    sp.add_argument("--port", type=_port_arg, help="port of server whose log to tail (required when multiple are running)")
     sp.add_argument("--tail", type=int, default=100)
     sp.add_argument("-f", "--follow", action="store_true")
 
@@ -180,8 +242,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     oc.add_argument(
         "--target",
-        default="~/.config/opencode/opencode.json",
-        help="OpenCode config path (only used with --apply)",
+        default=_DEFAULT_OPENCODE_TARGET,
+        help=f"OpenCode config path (used with --apply or --reset; default: {_DEFAULT_OPENCODE_TARGET})",
     )
     oc.add_argument(
         "--overwrite",
@@ -189,9 +251,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="replace the entire provider block instead of merging (only used with --apply)",
     )
     oc.add_argument(
+        "--reset",
+        action="store_true",
+        help="remove mlx-manager-managed provider blocks from the OpenCode config and exit",
+    )
+    oc.add_argument(
         "--remote",
         action="store_true",
         help="use LAN IP instead of localhost in emitted config (for remote clients)",
+    )
+    oc.add_argument(
+        "--choose",
+        action="store_true",
+        help="prompt for target path, merge/overwrite, and Claude Code snippet (implies --apply)",
     )
 
     cc = cfg_sub.add_parser("claude-code", help="emit Claude Code / LiteLLM snippet")
@@ -331,18 +403,230 @@ def _resolve_model_for_action(cfg: Config, requested: str | None) -> "tuple[int,
     return EXIT_OK, m
 
 
+def _prompt(input_fn: Callable[[str], str], prompt: str) -> str:
+    try:
+        return input_fn(prompt).strip()
+    except EOFError as e:
+        raise ValueError("input cancelled") from e
+
+
+def _choose_model_from_list(
+    cfg: Config,
+    *,
+    input_fn: Callable[[str], str] | None = None,
+    out_fn: Callable[[str], None] = print,
+) -> Model:
+    input_fn = input if input_fn is None else input_fn
+    models = discover(cfg.models)
+    if not models:
+        raise LookupError("no models discovered; check [models].directories or add aliases")
+
+    id_w = min(max(max(len(m.id) for m in models), 8), 40)
+    out_fn("Discovered models:")
+    for idx, model in enumerate(models, start=1):
+        # Truncate over-long IDs so the `source`/`path` columns stay aligned;
+        # the full id is always still selectable by typing it in below.
+        display_id = model.id if len(model.id) <= id_w else model.id[: id_w - 1] + "…"
+        out_fn(f"  {idx:>2}. {display_id:<{id_w}}  {model.source:<9} {model.path}")
+
+    while True:
+        default_hint = ", Enter=1" if len(models) == 1 else ""
+        answer = _prompt(input_fn, f"model [1-{len(models)}{default_hint}]: ")
+        if not answer and len(models) == 1:
+            return models[0]
+        if answer.lower() in {"q", "quit", "cancel"}:
+            raise ValueError("selection cancelled")
+        if answer.isdigit():
+            idx = int(answer)
+            if 1 <= idx <= len(models):
+                return models[idx - 1]
+        for model in models:
+            if answer == model.id or answer == str(model.path):
+                return model
+        out_fn(f"Enter a number from 1 to {len(models)}, or an exact model id/path.")
+
+
+def _choose_host(
+    default_host: str,
+    *,
+    input_fn: Callable[[str], str] | None = None,
+) -> tuple[str, bool]:
+    input_fn = input if input_fn is None else input_fn
+    answer = _prompt(input_fn, f"host [{default_host}; all=0.0.0.0]: ")
+    if not answer:
+        host = default_host
+    elif answer.lower() in {"all", "any", "*", "0.0.0.0"}:
+        host = "0.0.0.0"
+    else:
+        host = answer
+    return host, host == "0.0.0.0"
+
+
+def _choose_port(
+    default_port: int,
+    *,
+    input_fn: Callable[[str], str] | None = None,
+    out_fn: Callable[[str], None] = print,
+) -> int:
+    input_fn = input if input_fn is None else input_fn
+    while True:
+        answer = _prompt(input_fn, f"port [{default_port}]: ")
+        if not answer:
+            return default_port
+        try:
+            port = int(answer)
+        except ValueError:
+            out_fn("Enter a numeric TCP port.")
+            continue
+        if _PORT_MIN <= port <= _PORT_MAX:
+            return port
+        out_fn(f"Enter a port between {_PORT_MIN} and {_PORT_MAX}.")
+
+
+def _choose_replace(
+    *,
+    input_fn: Callable[[str], str] | None = None,
+) -> bool:
+    input_fn = input if input_fn is None else input_fn
+    answer = _prompt(input_fn, "replace existing managed server on this port if needed? [y/N]: ")
+    return answer.lower() in {"y", "yes"}
+
+
+def _choose_update_opencode(
+    *,
+    input_fn: Callable[[str], str] | None = None,
+) -> bool:
+    input_fn = input if input_fn is None else input_fn
+    answer = _prompt(
+        input_fn,
+        "update OpenCode config (~/.config/opencode/opencode.json) to point at this server? [y/N]: ",
+    )
+    return answer.lower() in {"y", "yes"}
+
+
+def _choose_opencode_apply_options(
+    *,
+    default_target: str,
+    default_overwrite: bool = False,
+    input_fn: Callable[[str], str] | None = None,
+    out_fn: Callable[[str], None] = print,
+) -> tuple[str, bool, bool]:
+    """Prompt for target path, merge/overwrite mode, and Claude Code snippet opt-in.
+
+    Returns ``(target, overwrite, also_claude_code)``. Used by both
+    ``_cmd_start_guided`` (after the user opts in to updating OpenCode) and
+    ``config opencode --choose``.
+    """
+    input_fn = input if input_fn is None else input_fn
+
+    # Path prompt: must not collide with y/N answers on the surrounding lines.
+    # The previous "[default]" form was being read as a yes/no choice and a
+    # bare "y" got accepted as a literal filename — silently writing the
+    # JSON to ./y next to the user's cwd. Reword + reject y/n explicitly.
+    while True:
+        answer = _prompt(
+            input_fn,
+            f"opencode config path (press Enter to use {default_target}): ",
+        )
+        if not answer:
+            target = default_target
+            break
+        if answer.lower() in {"y", "yes", "n", "no"}:
+            out_fn(
+                "That looks like a yes/no answer, not a path. "
+                f"Press Enter to keep the default ({default_target}), "
+                "or type a file path (e.g. ~/.config/opencode/opencode.json)."
+            )
+            continue
+        target = answer
+        break
+
+    default_mode = "o" if default_overwrite else "m"
+    while True:
+        answer = _prompt(
+            input_fn,
+            f"merge into existing block, or overwrite/reset the whole block? [m/o, default={default_mode}]: ",
+        )
+        if not answer:
+            overwrite = default_overwrite
+            break
+        low = answer.lower()
+        if low in {"m", "merge"}:
+            overwrite = False
+            break
+        if low in {"o", "overwrite", "reset"}:
+            overwrite = True
+            break
+        out_fn("Enter 'm' (merge) or 'o' (overwrite).")
+
+    answer = _prompt(
+        input_fn,
+        "also print a Claude Code (LiteLLM) snippet to stdout? [y/N]: ",
+    )
+    also_claude_code = answer.lower() in {"y", "yes"}
+
+    return target, overwrite, also_claude_code
+
+
 def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
+    if getattr(args, "choose", False):
+        return _cmd_start_guided(cfg, args)
+
     rc, m_or_err = _resolve_model_for_action(cfg, args.model)
     if rc != EXIT_OK:
         _eprint(f"error: {m_or_err}")
         return rc
     model = m_or_err  # type: ignore[assignment]
 
+    return _start_model(cfg, args, model)
+
+
+def _extra_arg_has_flag(cli_pairs: list[str], config_flags: list[str], flag: str) -> bool:
+    """Return True if *flag* already appears in either input list.
+
+    *cli_pairs* are ``KEY=VAL`` strings from repeated ``--extra-arg`` on the CLI
+    (no leading dashes). *config_flags* are raw ``--flag`` / ``--flag=val``
+    strings from ``[server].extra_args`` in the TOML config. *flag* is compared
+    without leading dashes.
+    """
+    norm = flag.lstrip("-")
+    for kv in cli_pairs:
+        if kv.partition("=")[0].lstrip("-") == norm:
+            return True
+    for item in config_flags:
+        item_norm = item.lstrip("-")
+        if item_norm == norm or item_norm.startswith(norm + "="):
+            return True
+    return False
+
+
+def _start_model(cfg: Config, args: argparse.Namespace, model: Model) -> int:
+    """Start the server for an already resolved model."""
+
     host = args.host or cfg.server.host
+    if host == "0.0.0.0" and not args.bind_all:
+        _eprint("error: binding on 0.0.0.0 requires --bind-all")
+        return EXIT_USAGE
     if args.bind_all:
         host = "0.0.0.0"
         _eprint("warning: binding on 0.0.0.0 — server is reachable from the network")
     port = args.port or cfg.server.port
+
+    plan = model_memory_plan(
+        model.path,
+        max_context_tokens=cfg.server.max_context_tokens,
+        prompt_cache_fraction=cfg.server.prompt_cache_fraction,
+    )
+
+    extra_arg_pairs: list[str] = list(args.extra_arg)
+    if not _extra_arg_has_flag(
+        cli_pairs=extra_arg_pairs,
+        config_flags=cfg.server.extra_args,
+        flag="prompt-cache-bytes",
+    ):
+        if plan is not None:
+            _, cache_bytes = plan
+            extra_arg_pairs = [f"--prompt-cache-bytes={cache_bytes}"] + extra_arg_pairs
 
     try:
         with srv.acquire_lock(srv.port_lock_path(cfg, port)):
@@ -352,7 +636,7 @@ def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
                 model,
                 host=host,
                 port=port,
-                extra_arg_pairs=args.extra_arg,
+                extra_arg_pairs=extra_arg_pairs,
                 replace=args.replace,
                 on_warning=lambda w: _eprint(f"warning: {w}"),
                 on_verbose=(lambda m: _eprint(f"verbose: {m}") if args.verbose else None),
@@ -368,7 +652,99 @@ def _cmd_start(cfg: Config, args: argparse.Namespace) -> int:
     print(f"  path:       {state.model_path}")
     print(f"  base_url:   {state.base_url}")
     print(f"  log:        {srv.port_log_path(cfg, port)}")
+
+    ctx_len = plan[0] if plan else None
+    if getattr(args, "update_opencode", False):
+        ctx = ProviderContext(
+            base_url=state.base_url,
+            api_key=cfg.providers.api_key,
+            provider_name=managed_provider_name(f"{cfg.providers.provider_name}:{port}"),
+            model_id=state.model_alias,
+            context_length=ctx_len,
+        )
+        target = expand(getattr(args, "opencode_target", _DEFAULT_OPENCODE_TARGET))
+        overwrite = getattr(args, "overwrite", False)
+        try:
+            with srv.acquire_lock(_opencode_lock_path(target)):
+                summary = apply_opencode(ctx, target, overwrite=overwrite)
+            print(f"  opencode:   {summary}")
+        except (ApplyError, OSError, srv.ServerError) as e:
+            _eprint(f"warning: opencode config not updated: {e}")
+
+    if getattr(args, "print_claude_code_snippet", False):
+        snippet_ctx = ProviderContext(
+            base_url=state.base_url,
+            api_key=cfg.providers.api_key,
+            provider_name=cfg.providers.provider_name,
+            model_id=state.model_alias,
+            context_length=ctx_len,
+        )
+        print()
+        print("--- Claude Code (LiteLLM) snippet ---")
+        sys.stdout.write(claude_code_snippet(snippet_ctx))
+
     return EXIT_OK
+
+
+def _cmd_start_guided(cfg: Config, args: argparse.Namespace) -> int:
+    try:
+        if getattr(args, "model", None):
+            rc, m_or_err = _resolve_model_for_action(cfg, args.model)
+            if rc != EXIT_OK:
+                _eprint(f"error: {m_or_err}")
+                return rc
+            model = m_or_err
+        else:
+            model = _choose_model_from_list(cfg)
+
+        if args.bind_all:
+            host = "0.0.0.0"
+            bind_all = True
+        elif args.host:
+            host = args.host
+            bind_all = False
+        else:
+            host, bind_all = _choose_host(cfg.server.host)
+
+        port = args.port or _choose_port(cfg.server.port)
+        replace = args.replace or _choose_replace()
+
+        update_opencode_flag = getattr(args, "update_opencode", False)
+        opencode_target = getattr(args, "opencode_target", _DEFAULT_OPENCODE_TARGET)
+        overwrite = getattr(args, "overwrite", False)
+        print_claude_code_snippet = False
+        if update_opencode_flag:
+            # CLI flags fully specify the apply; skip all OpenCode sub-prompts.
+            update_opencode = True
+        else:
+            update_opencode = _choose_update_opencode()
+            if update_opencode:
+                opencode_target, overwrite, print_claude_code_snippet = (
+                    _choose_opencode_apply_options(
+                        default_target=opencode_target,
+                        default_overwrite=overwrite,
+                    )
+                )
+    except LookupError as e:
+        _eprint(f"error: {e}")
+        return EXIT_CONFIG
+    except ValueError as e:
+        _eprint(f"error: {e}")
+        return EXIT_USAGE
+
+    start_args = argparse.Namespace(
+        host=host,
+        port=port,
+        replace=replace,
+        bind_all=bind_all,
+        extra_arg=args.extra_arg,
+        verbose=getattr(args, "verbose", False),
+        update_opencode=update_opencode,
+        overwrite=overwrite,
+        opencode_target=opencode_target,
+        print_claude_code_snippet=print_claude_code_snippet,
+    )
+    return _start_model(cfg, start_args, model)
 
 
 def _cmd_stop(cfg: Config, args: argparse.Namespace) -> int:
@@ -408,6 +784,9 @@ def _cmd_restart(cfg: Config, args: argparse.Namespace) -> int:
         bind_all=args.bind_all,
         extra_arg=args.extra_arg,
         verbose=getattr(args, "verbose", False),
+        update_opencode=getattr(args, "update_opencode", False),
+        overwrite=getattr(args, "overwrite", False),
+        opencode_target=getattr(args, "opencode_target", _DEFAULT_OPENCODE_TARGET),
     )
     return _cmd_start(cfg, start_args)
 
@@ -416,12 +795,15 @@ def _cmd_switch(cfg: Config, args: argparse.Namespace) -> int:
     """Swap running server to a different model (convenience alias for restart --replace)."""
     start_args = argparse.Namespace(
         model=args.model,
-        host=args.host or cfg.server.host,
-        port=args.port or cfg.server.port,
+        host=args.host,
+        port=args.port,
         replace=True,
         bind_all=args.bind_all,
         extra_arg=args.extra_arg,
         verbose=args.verbose,
+        update_opencode=getattr(args, "update_opencode", False),
+        overwrite=getattr(args, "overwrite", False),
+        opencode_target=getattr(args, "opencode_target", _DEFAULT_OPENCODE_TARGET),
     )
     return _cmd_start(cfg, start_args)
 
@@ -574,33 +956,54 @@ def _resolve_base_url(base_url: str, *, remote: bool) -> str:
 
 
 def _provider_contexts(
-    cfg: Config, model_id: str | None, *, remote: bool = False
+    cfg: Config, model_id: str | None, *, remote: bool = False, managed_names: bool = False
 ) -> list[ProviderContext]:
     """Return one ProviderContext per running server (or one from config if none running).
 
-    When multiple servers are running the provider name gets a ``:port`` suffix
-    so each entry is uniquely addressable.
+    OpenCode-managed provider names include a ``:port`` suffix so the same
+    naming scheme is used for one or many servers.
     """
     running = srv.list_running_states(cfg)
     hostname = socket.gethostname() if remote else ""
-    multi = len(running) > 1
 
     def _make_name(port: int | None = None) -> str:
         name = cfg.providers.provider_name
         if remote:
             name = f"{name}@{hostname}"
-        if multi and port is not None:
+        if managed_names and port is not None:
             name = f"{name}:{port}"
-        return name
+        return managed_provider_name(name) if managed_names else name
 
     if not running:
+        mid = model_id or cfg.models.default_model or ""
+        ctx_len: int | None = None
+        if mid:
+            try:
+                m = resolve(cfg.models, mid)
+                plan = model_memory_plan(
+                    m.path,
+                    max_context_tokens=cfg.server.max_context_tokens,
+                    prompt_cache_fraction=cfg.server.prompt_cache_fraction,
+                )
+                ctx_len = plan[0] if plan else None
+            except LookupError:
+                pass
         base_url = _resolve_base_url(cfg.base_url, remote=remote)
         return [ProviderContext(
             base_url=base_url,
             api_key=cfg.providers.api_key,
-            provider_name=_make_name(),
-            model_id=model_id or cfg.models.default_model or "",
+            provider_name=_make_name(cfg.server.port),
+            model_id=mid,
+            context_length=ctx_len,
         )]
+
+    def _ctx_len_for_state(state: srv.State) -> int | None:
+        plan = model_memory_plan(
+            Path(state.model_path),
+            max_context_tokens=cfg.server.max_context_tokens,
+            prompt_cache_fraction=cfg.server.prompt_cache_fraction,
+        )
+        return plan[0] if plan else None
 
     return [
         ProviderContext(
@@ -608,6 +1011,7 @@ def _provider_contexts(
             api_key=cfg.providers.api_key,
             provider_name=_make_name(state.port),
             model_id=model_id or state.model_alias,
+            context_length=_ctx_len_for_state(state),
         )
         for state in running
     ]
@@ -621,20 +1025,50 @@ def _provider_context(cfg: Config, model_id: str, *, remote: bool = False) -> Pr
 
 def _cmd_config_opencode(cfg: Config, args: argparse.Namespace) -> int:
     remote = getattr(args, "remote", False)
-    contexts = _provider_contexts(cfg, args.model, remote=remote)
+    if args.reset:
+        target = expand(args.target)
+        try:
+            with srv.acquire_lock(_opencode_lock_path(target)):
+                summary = reset_opencode(target)
+        except (ApplyError, OSError, srv.ServerError) as e:
+            _eprint(f"error: {e}")
+            return EXIT_CONFIG
+        print(summary)
+        return EXIT_OK
+    contexts = _provider_contexts(cfg, args.model, remote=remote, managed_names=True)
     if not any(c.model_id for c in contexts):
         _eprint("error: no model available; pass --model or run `mlx-manager list`")
         return EXIT_CONFIG
     if remote:
         _vprint(f"remote mode: using LAN IP in config", args.verbose)
+
+    print_claude_code = False
+    if getattr(args, "choose", False):
+        try:
+            target_str, overwrite, print_claude_code = _choose_opencode_apply_options(
+                default_target=args.target,
+                default_overwrite=args.overwrite,
+            )
+        except ValueError as e:
+            _eprint(f"error: {e}")
+            return EXIT_USAGE
+        args.target = target_str
+        args.overwrite = overwrite
+        args.apply = True  # --choose implies --apply.
+
     if args.apply:
         target = expand(args.target)
         try:
-            summary = apply_opencode(contexts, target, overwrite=args.overwrite)
-        except (ApplyError, OSError) as e:
+            with srv.acquire_lock(_opencode_lock_path(target)):
+                summary = apply_opencode(contexts, target, overwrite=args.overwrite)
+        except (ApplyError, OSError, srv.ServerError) as e:
             _eprint(f"error: {e}")
             return EXIT_CONFIG
         print(summary)
+        if print_claude_code:
+            print()
+            print("--- Claude Code (LiteLLM) snippet ---")
+            sys.stdout.write(claude_code_snippet(contexts[0]))
         return EXIT_OK
     sys.stdout.write(opencode_snippet(contexts, format=args.format))
     return EXIT_OK
@@ -983,6 +1417,24 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         add("memory", "WARN", "sysctl hw.memsize unavailable")
 
+    # Metal/GPU wired-memory limit. The kernel default (0) caps at ~75% of RAM,
+    # which is enough for moderate models but a common source of OOM under
+    # concurrent decodes or long contexts. Surface the value so the user can
+    # tune `sudo sysctl iogpu.wired_limit_mb=N` before raising context.
+    if platform.system() == "Darwin":
+        wired = wired_limit_mb()
+        if wired is None:
+            add("wired_limit", "WARN", "sysctl iogpu.wired_limit_mb unavailable")
+        elif wired == 0:
+            add(
+                "wired_limit",
+                "WARN",
+                "iogpu.wired_limit_mb=0 (kernel default ~75% of RAM); "
+                "raise with `sudo sysctl iogpu.wired_limit_mb=N` to reduce Metal OOM risk",
+            )
+        else:
+            add("wired_limit", "OK", f"iogpu.wired_limit_mb={wired}")
+
     # Firewall status (macOS pf).
     try:
         fw_out = subprocess.run(["pfctl", "--status"], capture_output=True, text=True, timeout=5)
@@ -1261,6 +1713,7 @@ def _cmd_benchmark(cfg: Config, args: argparse.Namespace) -> int:
 _HANDLERS = {
     "list": _cmd_list,
     "start": _cmd_start,
+    "load": _cmd_start_guided,
     "stop": _cmd_stop,
     "restart": _cmd_restart,
     "switch": _cmd_switch,

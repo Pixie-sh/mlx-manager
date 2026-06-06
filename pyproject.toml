@@ -26,12 +26,19 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Systems Administration",
 ]
+
 dependencies = [
     "tomli-w>=1.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Pixie-sh/mlx-manager"
+Repository = "https://github.com/Pixie-sh/mlx-manager"
+Issues = "https://github.com/Pixie-sh/mlx-manager/issues"
+Changelog = "https://github.com/Pixie-sh/mlx-manager/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "huggingface-hub>=0.20"]
 
 [project.scripts]
 mlx-manager = "mlx_manager.cli:main"

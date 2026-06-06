@@ -96,6 +96,8 @@ def cfg_factory(tmp_path: Path):
             "max_log_bytes": 1024,
             "max_log_files": 3,
             "patch_tool_calls": True,
+            "max_context_tokens": 0,
+            "prompt_cache_fraction": 0.5,
             "directories": [],
             "default_model": "",
             "aliases": {},
@@ -122,6 +124,8 @@ def cfg_factory(tmp_path: Path):
             max_log_bytes=defaults["max_log_bytes"],
             max_log_files=defaults["max_log_files"],
             patch_tool_calls=defaults["patch_tool_calls"],
+            max_context_tokens=defaults["max_context_tokens"],
+            prompt_cache_fraction=defaults["prompt_cache_fraction"],
         )
         models = ModelsCfg(
             directories=list(defaults["directories"]),

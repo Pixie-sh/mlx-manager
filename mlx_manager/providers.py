@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 
+MANAGED_PROVIDER_PREFIX = "mlx-manager:"
+
+
 @dataclass(frozen=True)
 class ProviderContext:
     """Inputs needed to render a provider snippet."""
@@ -16,13 +19,47 @@ class ProviderContext:
     api_key: str
     provider_name: str
     model_id: str
+    context_length: int | None = None
 
 
 class ApplyError(Exception):
     """Raised when applying a snippet to a config file fails."""
 
 
+def managed_provider_name(provider_name: str) -> str:
+    """Return the OpenCode provider key reserved for mlx-manager entries."""
+    if provider_name.startswith(MANAGED_PROVIDER_PREFIX):
+        return provider_name
+    return f"{MANAGED_PROVIDER_PREFIX}{provider_name}"
+
+
+def is_managed_provider_name(provider_name: str) -> bool:
+    """Return True when *provider_name* is an mlx-manager managed provider key."""
+    return provider_name.startswith(MANAGED_PROVIDER_PREFIX)
+
+
+def _legacy_provider_candidates(managed_name: str) -> list[str]:
+    """Return possible pre-`mlx-manager:` keys that this managed name replaces.
+
+    ``"mlx-manager:mlx-local:8080"`` → ``["mlx-local:8080", "mlx-local"]``.
+    Used by :func:`apply_opencode` to migrate users who already had a bare
+    ``mlx-local`` provider block pointing at our server. The trailing port form
+    is included first so callers can match against the most specific candidate.
+    """
+    if not managed_name.startswith(MANAGED_PROVIDER_PREFIX):
+        return []
+    stripped = managed_name[len(MANAGED_PROVIDER_PREFIX):]
+    candidates = [stripped]
+    head, sep, tail = stripped.rpartition(":")
+    if sep and head and tail.isdigit():
+        candidates.append(head)
+    return candidates
+
+
 def _opencode_provider_block(ctx: ProviderContext) -> dict:
+    model_def: dict = {"name": ctx.model_id}
+    if ctx.context_length:
+        model_def["contextLength"] = ctx.context_length
     return {
         ctx.provider_name: {
             "npm": "@ai-sdk/openai-compatible",
@@ -32,7 +69,7 @@ def _opencode_provider_block(ctx: ProviderContext) -> dict:
                 "apiKey": ctx.api_key,
             },
             "models": {
-                ctx.model_id: {"name": ctx.model_id},
+                ctx.model_id: model_def,
             },
         }
     }
@@ -115,6 +152,18 @@ def apply_opencode(
 
     actions: list[str] = []
     for c in contexts:
+        # Migrate any pre-`mlx-manager:` block that points at the same backend.
+        # The baseURL fingerprint check protects users who manually curated a
+        # `mlx-local` provider against a different server.
+        for legacy in _legacy_provider_candidates(c.provider_name):
+            existing_legacy = providers.get(legacy)
+            if (
+                isinstance(existing_legacy, dict)
+                and existing_legacy.get("options", {}).get("baseURL") == c.base_url
+            ):
+                del providers[legacy]
+                actions.append(f"{legacy!r} migrated")
+
         new_block = _opencode_provider_block(c)[c.provider_name]
         existing = providers.get(c.provider_name)
         if existing is None:
@@ -134,6 +183,40 @@ def apply_opencode(
         f.write("\n")
     os.replace(tmp, target)
     return f"{', '.join(actions)} in {target}"
+
+
+def reset_opencode(target: Path) -> str:
+    """Remove mlx-manager managed OpenCode provider entries from *target*."""
+    target = Path(target)
+    if not target.exists():
+        return f"no OpenCode config found at {target}"
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ApplyError(f"{target} is not valid JSON: {e}") from e
+    if not isinstance(doc, dict):
+        raise ApplyError(f"{target} top-level must be a JSON object")
+
+    providers = doc.get("provider", {})
+    if not isinstance(providers, dict):
+        raise ApplyError("`provider` key exists but is not a JSON object")
+
+    removed = [name for name in providers if is_managed_provider_name(name)]
+    if not removed:
+        return f"0 mlx-manager provider(s) removed from {target}"
+
+    for name in removed:
+        del providers[name]
+
+    backup = target.with_name(target.name + ".bak")
+    shutil.copy2(target, backup)
+    tmp = target.with_name(target.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, target)
+    return f"{len(removed)} mlx-manager provider(s) removed from {target}"
 
 
 def claude_code_experimental_env(ctx: ProviderContext) -> str:

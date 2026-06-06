@@ -11,6 +11,7 @@ def test_first_run_writes_defaults(tmp_path):
     assert cfg_path.exists()
     assert cfg.server.host == "127.0.0.1"
     assert cfg.server.port == 8080
+    assert "~/.models/mlx" in cfg.models.directories
     assert cfg.providers.api_key == "mlx-local"
 
 

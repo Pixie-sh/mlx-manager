@@ -139,6 +139,62 @@ def test_stop_refuses_when_state_pid_argv_unrelated(tmp_path, cfg_factory):
         p.wait(timeout=5)
 
 
+def test_stop_accepts_shim_argv(tmp_path, cfg_factory, monkeypatch):
+    cfg = cfg_factory()
+    state_path = srv.port_state_path(cfg, cfg.server.port)
+    pid = 424242
+    alive = True
+
+    srv.write_state(
+        state_path,
+        srv.State(
+            pid=pid,
+            model_alias="ghost",
+            model_path="/models/ghost",
+            host="127.0.0.1",
+            port=cfg.server.port,
+            base_url=f"http://127.0.0.1:{cfg.server.port}/v1",
+            command=[
+                sys.executable,
+                str(srv._SERVER_SHIM),
+                "server",
+                "--model",
+                "ghost",
+                "--port",
+                str(cfg.server.port),
+            ],
+            started_at="2026-01-01T00:00:00Z",
+            python_executable=sys.executable,
+        ),
+    )
+
+    def fake_pid_alive(pid_arg):
+        assert pid_arg == pid
+        return alive
+
+    def fake_kill(pid_arg, sig):
+        nonlocal alive
+        assert pid_arg == pid
+        assert sig == signal.SIGTERM
+        alive = False
+
+    monkeypatch.setattr(srv, "pid_alive", fake_pid_alive)
+    monkeypatch.setattr(
+        srv,
+        "pid_command",
+        lambda pid_arg: (
+            f"{sys.executable} {srv._SERVER_SHIM} server --model ghost "
+            f"--host 127.0.0.1 --port {cfg.server.port}"
+        ),
+    )
+    monkeypatch.setattr(srv.os, "kill", fake_kill)
+
+    state = srv.stop(cfg, port=cfg.server.port)
+
+    assert state.pid == pid
+    assert not state_path.exists()
+
+
 def test_stop_reports_not_running_for_dead_pid(tmp_path, cfg_factory):
     cfg = cfg_factory()
     state_path = srv.port_state_path(cfg, cfg.server.port)

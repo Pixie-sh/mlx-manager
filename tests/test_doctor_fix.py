@@ -6,7 +6,7 @@ from mlx_manager import cli
 
 
 def test_pipx_app_name_detects_venv(monkeypatch):
-    monkeypatch.setattr(sys, "prefix", "/Users/rs/.local/pipx/venvs/mlx-manager")
+    monkeypatch.setattr(sys, "prefix", "/opt/pipx/venvs/mlx-manager")
     assert cli._pipx_app_name() == "mlx-manager"
 
 
@@ -76,6 +76,36 @@ def test_doctor_fix_repoints_server_python_when_default_lacks_mlx_lm(
     # Config file updated to the working interpreter.
     assert load(cfg_path).server.python_executable == "/venv/bin/python"
     assert "set server.python_executable" in capsys.readouterr().err
+
+
+def test_doctor_warns_when_wired_limit_default(monkeypatch, cfg_factory):
+    cfg = cfg_factory(directories=[])
+    monkeypatch.setattr(cli, "wired_limit_mb", lambda: 0)
+    monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cli.platform, "machine", lambda: "arm64")
+    results = cli._doctor_checks(cfg)
+    entry = next(r for r in results if r["name"] == "wired_limit")
+    assert entry["status"] == "WARN"
+    assert "iogpu.wired_limit_mb=0" in entry["detail"]
+
+
+def test_doctor_reports_wired_limit_when_set(monkeypatch, cfg_factory):
+    cfg = cfg_factory(directories=[])
+    monkeypatch.setattr(cli, "wired_limit_mb", lambda: 24000)
+    monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cli.platform, "machine", lambda: "arm64")
+    results = cli._doctor_checks(cfg)
+    entry = next(r for r in results if r["name"] == "wired_limit")
+    assert entry["status"] == "OK"
+    assert "24000" in entry["detail"]
+
+
+def test_doctor_skips_wired_limit_off_darwin(monkeypatch, cfg_factory):
+    cfg = cfg_factory(directories=[])
+    monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(cli.platform, "machine", lambda: "x86_64")
+    results = cli._doctor_checks(cfg)
+    assert not any(r["name"] == "wired_limit" for r in results)
 
 
 def test_doctor_fix_advises_when_custom_server_python_lacks_mlx_lm(
