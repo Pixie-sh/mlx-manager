@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mlx_manager.config import ModelsCfg
-from mlx_manager.models import discover, resolve
+from mlx_manager.models import discover, discover_with_skipped, resolve
 
 
 def test_discover_plain_directory(fake_models_root):
@@ -107,3 +107,52 @@ def test_resolve_unknown_raises(tmp_path):
     cfg = ModelsCfg(directories=[str(tmp_path)], default_model="", aliases={})
     with pytest.raises(LookupError):
         resolve(cfg, "ghost-model")
+
+
+def test_discover_with_skipped_surfaces_gguf_and_partial_dirs(tmp_path):
+    """GGUF-only dirs and half-formed model dirs are returned as SkippedDir
+    with a human-readable reason — they don't appear in `discover()` itself."""
+    root = tmp_path / "models"
+    root.mkdir()
+
+    # Valid MLX model.
+    good = root / "good-mlx"
+    good.mkdir()
+    (good / "config.json").write_text("{}")
+    (good / "model.safetensors").write_bytes(b"")
+
+    # GGUF-only dir (the reported "missing model" case).
+    gguf = root / "some-gguf-model"
+    gguf.mkdir()
+    (gguf / "model.gguf").write_bytes(b"")
+
+    # config.json but no weights.
+    no_weights = root / "no-weights"
+    no_weights.mkdir()
+    (no_weights / "config.json").write_text("{}")
+
+    # Safetensors but no config.json.
+    no_config = root / "no-config"
+    no_config.mkdir()
+    (no_config / "model.safetensors").write_bytes(b"")
+
+    cfg = ModelsCfg(directories=[str(root)], default_model="", aliases={})
+    models, skipped = discover_with_skipped(cfg)
+
+    assert {m.id for m in models} == {"good-mlx"}
+
+    by_name = {s.path.name: s.reason for s in skipped}
+    assert "GGUF" in by_name["some-gguf-model"]
+    assert "no safetensors" in by_name["no-weights"]
+    assert "missing config.json" in by_name["no-config"]
+
+    # `discover()` keeps its old shape (models only).
+    assert [m.id for m in discover(cfg)] == ["good-mlx"]
+
+
+def test_discover_with_skipped_reports_unusable_hf_repo(fake_hf_cache):
+    """HF cache repos whose snapshots have no weights surface as skipped."""
+    cfg = ModelsCfg(directories=[str(fake_hf_cache)], default_model="", aliases={})
+    _, skipped = discover_with_skipped(cfg)
+    paths = {s.path.name for s in skipped}
+    assert "models--someorg--no-weights" in paths

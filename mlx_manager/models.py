@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Iterator, Literal, Union
 
 from mlx_manager.config import ModelsCfg
 from mlx_manager.paths import expand
@@ -16,6 +16,13 @@ Source = Literal["alias", "directory", "hf_cache"]
 # directory is found, so this only bounds *unproductive* walks.
 _MAX_DEPTH = 4
 
+# Reasons surfaced for directories that look like they were *meant* to be model
+# dirs but can't be served by mlx_lm. Stable enough to assert on in tests.
+_GGUF_REASON = "GGUF format (mlx_lm requires safetensors)"
+_NO_SAFETENSORS_REASON = "config.json present but no safetensors weights"
+_NO_CONFIG_REASON = "safetensors present but missing config.json"
+_NO_HF_SNAPSHOT_REASON = "no usable snapshot in HF cache repo"
+
 
 @dataclass(frozen=True)
 class Model:
@@ -27,22 +34,65 @@ class Model:
         return {"id": self.id, "path": str(self.path), "source": self.source}
 
 
+@dataclass(frozen=True)
+class SkippedDir:
+    """A directory that looked model-shaped but can't be served by mlx_lm."""
+
+    path: Path
+    reason: str
+
+    def to_dict(self) -> dict:
+        return {"path": str(self.path), "reason": self.reason}
+
+
+_Classification = Literal["model", "skipped", "container"]
+
+
+def _classify_dir(path: Path) -> tuple[_Classification, str | None]:
+    """Decide whether *path* is a model dir, a known-bad model dir, or neither.
+
+    A "model" needs both ``config.json`` and at least one safetensors weights
+    file (single, sharded, or ``weights.safetensors``). A "skipped" record is
+    emitted when the directory clearly *intended* to hold a model — has GGUF
+    weights, or one half of the (config + safetensors) pair — so the user can
+    see *why* it didn't show up. Everything else is a plain "container" we keep
+    walking into.
+    """
+    if not path.is_dir():
+        return "container", None
+
+    has_config = (path / "config.json").is_file()
+    has_safetensors = False
+    has_gguf = False
+    try:
+        for child in path.iterdir():
+            if not child.is_file():
+                continue
+            name = child.name
+            if name in ("model.safetensors", "weights.safetensors"):
+                has_safetensors = True
+            elif name.startswith("model-") and name.endswith(".safetensors"):
+                has_safetensors = True
+            elif name.endswith(".gguf"):
+                has_gguf = True
+    except (PermissionError, OSError):
+        return "container", None
+
+    if has_config and has_safetensors:
+        return "model", None
+    if has_gguf:
+        return "skipped", _GGUF_REASON
+    if has_config and not has_safetensors:
+        return "skipped", _NO_SAFETENSORS_REASON
+    if has_safetensors and not has_config:
+        return "skipped", _NO_CONFIG_REASON
+    return "container", None
+
+
 def _is_model_dir(path: Path) -> bool:
     """A directory is a candidate model iff it contains ``config.json`` and at
     least one safetensors weights file (single, sharded, or ``weights.safetensors``)."""
-    if not path.is_dir():
-        return False
-    if not (path / "config.json").is_file():
-        return False
-    if (path / "model.safetensors").is_file():
-        return True
-    if (path / "weights.safetensors").is_file():
-        return True
-    for child in path.iterdir():
-        name = child.name
-        if name.startswith("model-") and name.endswith(".safetensors"):
-            return True
-    return False
+    return _classify_dir(path)[0] == "model"
 
 
 def _pick_hf_snapshot(snapshots_dir: Path) -> Path | None:
@@ -59,8 +109,8 @@ def _pick_hf_snapshot(snapshots_dir: Path) -> Path | None:
     return None
 
 
-def _scan(root: Path, *, _depth: int = 0) -> Iterator[Model]:
-    """Recursively walk *root* yielding Models.
+def _scan(root: Path, *, _depth: int = 0) -> Iterator[Union[Model, SkippedDir]]:
+    """Recursively walk *root* yielding Models or SkippedDirs.
 
     Handles three layouts uniformly:
 
@@ -87,11 +137,28 @@ def _scan(root: Path, *, _depth: int = 0) -> Iterator[Model]:
                 yield Model(
                     id=f"{org}/{name}", path=snap.resolve(), source="hf_cache"
                 )
+            else:
+                snaps_dir = root / "snapshots"
+                try:
+                    has_any_snap = snaps_dir.is_dir() and any(
+                        s.is_dir() for s in snaps_dir.iterdir()
+                    )
+                except (PermissionError, OSError):
+                    has_any_snap = False
+                if has_any_snap:
+                    yield SkippedDir(
+                        path=root.resolve(), reason=_NO_HF_SNAPSHOT_REASON
+                    )
         return
 
-    if _depth > 0 and _is_model_dir(root):
-        yield Model(id=root.name, path=root.resolve(), source="directory")
-        return
+    if _depth > 0:
+        kind, reason = _classify_dir(root)
+        if kind == "model":
+            yield Model(id=root.name, path=root.resolve(), source="directory")
+            return
+        if kind == "skipped":
+            yield SkippedDir(path=root.resolve(), reason=reason or "unknown reason")
+            return
 
     try:
         children = sorted(root.iterdir())
@@ -105,9 +172,14 @@ def _scan(root: Path, *, _depth: int = 0) -> Iterator[Model]:
         yield from _scan(child, _depth=_depth + 1)
 
 
-def discover(cfg: ModelsCfg) -> list[Model]:
-    """Return the de-duplicated model list, alias > directory > hf_cache priority."""
+def _discover_internal(cfg: ModelsCfg) -> tuple[list[Model], list[SkippedDir]]:
+    """Walk every configured root once, partitioning into models and skipped dirs.
+
+    Alias > directory > hf_cache precedence applies to models; skipped dirs are
+    de-duplicated by resolved path.
+    """
     found: dict[str, Model] = {}
+    skipped_by_path: dict[Path, SkippedDir] = {}
 
     for alias, raw in cfg.aliases.items():
         target = expand(raw)
@@ -115,12 +187,29 @@ def discover(cfg: ModelsCfg) -> list[Model]:
 
     for raw_dir in cfg.directories:
         root = expand(raw_dir)
-        for m in _scan(root):
-            if m.id in found:
-                continue
-            found[m.id] = m
+        for entry in _scan(root):
+            if isinstance(entry, Model):
+                if entry.id in found:
+                    continue
+                found[entry.id] = entry
+            else:
+                skipped_by_path.setdefault(entry.path, entry)
 
-    return list(found.values())
+    skipped = sorted(skipped_by_path.values(), key=lambda s: str(s.path))
+    return list(found.values()), skipped
+
+
+def discover(cfg: ModelsCfg) -> list[Model]:
+    """Return the de-duplicated model list, alias > directory > hf_cache priority."""
+    models, _ = _discover_internal(cfg)
+    return models
+
+
+def discover_with_skipped(cfg: ModelsCfg) -> tuple[list[Model], list[SkippedDir]]:
+    """Like :func:`discover` but also returns directories that looked
+    model-shaped (had GGUF weights, or one of {config.json, safetensors} but
+    not both) so callers can explain *why* they aren't selectable."""
+    return _discover_internal(cfg)
 
 
 def resolve(cfg: ModelsCfg, requested: str) -> Model:

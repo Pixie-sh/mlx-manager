@@ -24,7 +24,7 @@ from mlx_manager.config import (
     update_value,
 )
 from mlx_manager.context import model_memory_plan, wired_limit_mb
-from mlx_manager.models import Model, discover, resolve
+from mlx_manager.models import Model, discover, discover_with_skipped, resolve
 from mlx_manager.paths import ensure_parent, expand
 from mlx_manager.providers import (
     ApplyError,
@@ -356,11 +356,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_list(cfg: Config, args: argparse.Namespace) -> int:
-    models = discover(cfg.models)
+    models, skipped = discover_with_skipped(cfg.models)
     if args.as_json:
         print(json.dumps([m.to_dict() for m in models], indent=2))
         return EXIT_OK
-    if not models:
+    if not models and not skipped:
         print("(no models discovered — check [models].directories or add aliases)")
         return EXIT_OK
 
@@ -376,18 +376,28 @@ def _cmd_list(cfg: Config, args: argparse.Namespace) -> int:
             return "?"
         return _human_size(sz)
 
-    id_w = max((len(m.id) for m in models), default=8)
-    id_w = min(max(id_w, 8), 40)
-    print(f"{'ID':<{id_w}}  SOURCE    WEIGHTS  SIZE   PATH")
-    for m in models:
-        wc = _weight_count(m.path)
-        sz = _dir_size(m.path)
-        line = f"{m.source:<9} {wc:<7} {sz:<6}  {m.path}"
-        if len(m.id) <= id_w:
-            print(f"{m.id:<{id_w}}  {line}")
-        else:
-            print(f"{m.id}")
-            print(f"{'':<{id_w}}  {line}")
+    if models:
+        id_w = max((len(m.id) for m in models), default=8)
+        id_w = min(max(id_w, 8), 40)
+        print(f"{'ID':<{id_w}}  SOURCE    WEIGHTS  SIZE   PATH")
+        for m in models:
+            wc = _weight_count(m.path)
+            sz = _dir_size(m.path)
+            line = f"{m.source:<9} {wc:<7} {sz:<6}  {m.path}"
+            if len(m.id) <= id_w:
+                print(f"{m.id:<{id_w}}  {line}")
+            else:
+                print(f"{m.id}")
+                print(f"{'':<{id_w}}  {line}")
+    else:
+        print("(no servable MLX models discovered)")
+
+    if skipped:
+        print()
+        print(f"Skipped ({len(skipped)} — not servable by mlx_lm):")
+        for s in skipped:
+            print(f"  {s.path}")
+            print(f"    reason: {s.reason}")
     return EXIT_OK
 
 
@@ -1347,8 +1357,15 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
         snapshot = type(cfg.models)(
             directories=[raw_dir], default_model="", aliases={}
         )
-        n = len(discover(snapshot))
-        add(f"models dir {raw_dir}", "OK", f"{n} model(s) found at {d}")
+        models, skipped = discover_with_skipped(snapshot)
+        detail = f"{len(models)} model(s) found at {d}"
+        if skipped:
+            sample = "; ".join(f"{s.path.name} ({s.reason})" for s in skipped[:3])
+            more = f", +{len(skipped) - 3} more" if len(skipped) > 3 else ""
+            detail += f"; {len(skipped)} skipped: {sample}{more}"
+            add(f"models dir {raw_dir}", "WARN", detail)
+        else:
+            add(f"models dir {raw_dir}", "OK", detail)
 
     # Alias resolution (warn if missing, per Config schema).
     for alias, raw_target in cfg.models.aliases.items():
