@@ -597,6 +597,28 @@ def _is_port_in_use(host: str, port: int) -> bool:
     return False
 
 
+def hf_hub_cache_dir() -> Path:
+    """Return the Hugging Face hub cache path used by the server process."""
+    if raw := os.environ.get("HF_HUB_CACHE"):
+        return expand(raw)
+    if raw := os.environ.get("HF_HOME"):
+        return expand(raw) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def ensure_hf_hub_cache_dir() -> Path:
+    """Create the HF hub cache root so mlx_lm's /v1/models probe is quiet."""
+    cache_dir = hf_hub_cache_dir()
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise ServerError(
+            f"could not create Hugging Face cache directory {cache_dir}: {e}",
+            exit_code=1,
+        ) from e
+    return cache_dir
+
+
 def start(
     cfg: Config,
     model: Model,
@@ -620,6 +642,8 @@ def start(
             exit_code=7,
         )
 
+    cache_dir = ensure_hf_hub_cache_dir()
+
     supported = supported_server_flags(cfg.server.python_executable)
     cmd, cwd, warnings = build_command(
         cfg, model, host, port, extra_arg_pairs, supported
@@ -629,6 +653,7 @@ def start(
             on_warning(w)
     if on_verbose:
         on_verbose(f"command: {' '.join(cmd)}")
+        on_verbose(f"Hugging Face cache: {cache_dir}")
         if cwd:
             on_verbose(f"cwd: {cwd}")
 

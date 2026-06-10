@@ -319,6 +319,69 @@ def test_build_command_uses_mlx_lm_when_patch_disabled(
     assert str(srv._SERVER_SHIM) not in cmd
 
 
+def test_hf_hub_cache_dir_prefers_explicit_env(tmp_path, monkeypatch):
+    cache = tmp_path / "custom-hf" / "hub"
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "ignored-home"))
+
+    assert srv.hf_hub_cache_dir() == cache
+
+
+def test_ensure_hf_hub_cache_dir_creates_missing_env_path(tmp_path, monkeypatch):
+    cache = tmp_path / "hf" / "hub"
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+
+    assert not cache.exists()
+    assert srv.ensure_hf_hub_cache_dir() == cache
+    assert cache.is_dir()
+
+
+def test_ensure_hf_hub_cache_dir_reports_create_failure(tmp_path, monkeypatch):
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")
+    monkeypatch.setenv("HF_HUB_CACHE", str(blocked / "hub"))
+
+    with pytest.raises(srv.ServerError, match="could not create Hugging Face cache"):
+        srv.ensure_hf_hub_cache_dir()
+
+
+def test_start_creates_hf_cache_before_spawning(tmp_path, cfg_factory, monkeypatch):
+    cache = tmp_path / "missing-hf" / "hub"
+    cfg = cfg_factory()
+    model_dir = tmp_path / "models" / "tiny"
+    model = Model(id="tiny", path=model_dir, source="directory")
+    spawned = {}
+
+    class FakeProc:
+        pid = 4242
+
+    def fake_popen(*args, **kwargs):
+        assert cache.is_dir()
+        spawned["args"] = args
+        spawned["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(srv, "mlx_lm_installed", lambda _py: True)
+    monkeypatch.setattr(srv, "supported_server_flags", lambda _py: set())
+    monkeypatch.setattr(srv, "mlx_lm_version", lambda _py: "test")
+    monkeypatch.setattr(srv, "_is_port_in_use", lambda _host, _port: False)
+    monkeypatch.setattr(srv, "wait_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(srv.subprocess, "Popen", fake_popen)
+
+    state = srv.start(
+        cfg,
+        model,
+        host="127.0.0.1",
+        port=cfg.server.port,
+        extra_arg_pairs=[],
+        replace=False,
+    )
+
+    assert state.pid == 4242
+    assert spawned
+
+
 def test_is_managed_process_recognizes_shim_argv(tmp_path):
     """A process launched via the patch shim (argv has no literal `mlx_lm`) must
     still be recognized as managed."""
