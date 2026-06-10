@@ -5,13 +5,25 @@ i.e. ``python <this file> server --model ... --host ... --port ...``. The shim
 patches ``mlx_lm.server`` in memory, then hands off to ``mlx_lm.cli.main()`` so
 the server behaves identically apart from the patch.
 
-The patch: when a tool call fails to parse (it gets dropped — typically because
-the model was cut off mid-call and the JSON is incomplete), force the response's
-``finish_reason`` to ``"length"``. Stock mlx_lm logs a warning and silently
-drops the call while still reporting ``finish_reason: "stop"``/``"tool_calls"``,
-so an API client sees a clean turn with no tool call and no error signal. With
-the patch the client gets ``length``, the standard OpenAI marker for a cut-off
-generation, and can react instead of flying blind.
+Two patches are applied:
+
+1. Tool-call finish_reason: when a tool call fails to parse (it gets dropped —
+   typically because the model was cut off mid-call and the JSON is incomplete),
+   force the response's ``finish_reason`` to ``"length"``. Stock mlx_lm logs a
+   warning and silently drops the call while still reporting
+   ``finish_reason: "stop"``/``"tool_calls"``, so an API client sees a clean turn
+   with no tool call and no error signal. With the patch the client gets
+   ``length``, the standard OpenAI marker for a cut-off generation, and can react
+   instead of flying blind.
+
+2. System-message merge: some clients (notably OpenCode) split their system
+   prompt into several consecutive ``system``-role messages. Strict chat
+   templates — the Qwen3 family in particular — raise
+   ``System message must be at the beginning.`` for any system message past the
+   first, which mlx_lm surfaces as an HTTP 404. We collapse consecutive system
+   messages into a single leading block before the template runs, so those
+   models accept multi-part system prompts. Lenient templates (Gemma, etc.)
+   render the merged block identically, so the patch is safe for every model.
 
 This runs as a *script* under the server's interpreter, which need not have
 mlx-manager importable — only stdlib and mlx_lm. The patch is best-effort: if
@@ -30,6 +42,51 @@ import threading
 _state = threading.local()
 
 
+def _join_system_content(a, b):
+    """Concatenate two system-message ``content`` values.
+
+    Content is usually a plain string (OpenAI chat shape) but may be a list of
+    content parts (multimodal). Strings join with a blank line; anything else is
+    normalised to a parts list and concatenated so no content is lost.
+    """
+    if isinstance(a, str) and isinstance(b, str):
+        if a and b:
+            return a + "\n\n" + b
+        return a or b
+    la = a if isinstance(a, list) else ([{"type": "text", "text": a}] if a else [])
+    lb = b if isinstance(b, list) else ([{"type": "text", "text": b}] if b else [])
+    return la + lb
+
+
+def _merge_system_messages(messages):
+    """Collapse runs of consecutive ``system`` messages into a single message.
+
+    Returns a new list; the input is not mutated. Non-system messages and their
+    order are preserved exactly. This keeps strict chat templates (Qwen3) from
+    raising on a second system message while leaving every other model's render
+    unchanged.
+    """
+    if not isinstance(messages, list):
+        return messages
+    merged = []
+    for msg in messages:
+        if (
+            isinstance(msg, dict)
+            and msg.get("role") == "system"
+            and merged
+            and isinstance(merged[-1], dict)
+            and merged[-1].get("role") == "system"
+        ):
+            prev = merged[-1]
+            merged[-1] = {
+                **prev,
+                "content": _join_system_content(prev.get("content"), msg.get("content")),
+            }
+        else:
+            merged.append(msg)
+    return merged
+
+
 def _apply_patch() -> None:
     import mlx_lm.server as server_mod
 
@@ -37,11 +94,14 @@ def _apply_patch() -> None:
     handler_cls = getattr(server_mod, "APIHandler", None)
     if formatter_cls is None or handler_cls is None:
         raise AttributeError("mlx_lm.server lacks ToolCallFormatter/APIHandler")
+    if not hasattr(handler_cls, "handle_chat_completions"):
+        raise AttributeError("mlx_lm.server.APIHandler lacks handle_chat_completions")
     if getattr(formatter_cls, "_mlxmgr_patched", False):
         return
 
     orig_init = formatter_cls.__init__
     orig_generate_response = handler_cls.generate_response
+    orig_handle_chat = handler_cls.handle_chat_completions
 
     def patched_init(self, *args, **kwargs):
         _state.tool_parse_failed = False
@@ -67,8 +127,17 @@ def _apply_patch() -> None:
                     choice["finish_reason"] = "length"
         return resp
 
+    def patched_handle_chat(self, *args, **kwargs):
+        # mlx_lm reads self.body["messages"] inside handle_chat_completions;
+        # normalise it first so strict templates accept multi-part system prompts.
+        body = getattr(self, "body", None)
+        if isinstance(body, dict) and isinstance(body.get("messages"), list):
+            body["messages"] = _merge_system_messages(body["messages"])
+        return orig_handle_chat(self, *args, **kwargs)
+
     formatter_cls.__init__ = patched_init
     handler_cls.generate_response = patched_generate_response
+    handler_cls.handle_chat_completions = patched_handle_chat
     formatter_cls._mlxmgr_patched = True
 
 
@@ -91,8 +160,9 @@ def main(argv: list[str] | None = None) -> None:
     try:
         _apply_patch()
         _announce_when_logging_ready(
-            "mlx-manager: tool-call patch active "
-            "(unparseable tool calls report finish_reason=length)"
+            "mlx-manager: patches active "
+            "(unparseable tool calls report finish_reason=length; "
+            "consecutive system messages merged for strict chat templates)"
         )
     except Exception as e:  # never block startup on a patch failure
         logging.getLogger(__name__).warning(
