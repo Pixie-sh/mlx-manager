@@ -57,13 +57,60 @@ Requires macOS on Apple Silicon, Python >= 3.11, and
 [`mlx_lm`](https://pypi.org/project/mlx-lm/) installed in the same interpreter
 `mlx-manager` will use to launch the server (by default `python3`).
 
+### Recommended: pipx or pip
+
+Install the CLI from PyPI:
+
+```bash
+pipx install mlx-manager
+```
+
+Or install into the active Python environment:
+
+```bash
+python3 -m pip install mlx-manager
+```
+
+Then install `mlx_lm` into the interpreter named by
+`[server].python_executable` in your config:
+
+```bash
+python3 -m pip install mlx-lm
+```
+
+### Standalone binary: curl installer
+
+For macOS Apple Silicon, install the latest GitHub Release binary with:
+
+```bash
+curl -fsSL https://github.com/Pixie-sh/mlx-manager/releases/latest/download/install.sh | sh
+```
+
+The installer downloads `mlx-manager-darwin-arm64.tar.gz`, verifies it against
+`checksums.txt`, and writes the binary to `~/.local/bin` by default. Override
+the target directory or version when needed:
+
+```bash
+curl -fsSL https://github.com/Pixie-sh/mlx-manager/releases/latest/download/install.sh \
+  | MLX_MANAGER_BIN_DIR=/usr/local/bin sh
+
+curl -fsSL https://github.com/Pixie-sh/mlx-manager/releases/download/v0.1.0/install.sh \
+  | MLX_MANAGER_VERSION=v0.1.0 sh
+```
+
+The standalone binary manages `mlx_lm` through your configured Python
+interpreter; it does not bundle model runtimes or `mlx_lm` itself. Run
+`mlx-manager doctor` after installation to verify the environment.
+
+### Install from this repository
+
 Install the runtime dependencies first:
 
 ```bash
 python3 -m pip install mlx-lm
 ```
 
-Then install `mlx-manager` from this repository:
+Then install `mlx-manager` from this repository for local development:
 
 ```bash
 uv pip install -e .

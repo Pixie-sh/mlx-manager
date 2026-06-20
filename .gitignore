@@ -94,3 +94,4 @@ ENV/
 /.codex/skills
 /.codex/specs
 /.codex/changelog
+.llmemo
