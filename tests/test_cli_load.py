@@ -67,6 +67,7 @@ def test_load_guides_model_host_port_and_replace(
     captured = {}
 
     monkeypatch.setattr(cli.srv, "start", _fake_start(captured))
+    monkeypatch.setattr(cli, "model_memory_plan", lambda *args, **kwargs: (4096, 123456))
     monkeypatch.setattr(
         "builtins.input",
         # model, host, port, replace?, update-opencode?
