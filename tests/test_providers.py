@@ -15,6 +15,7 @@ from mlx_manager.providers import (
     litellm_yaml,
     opencode_snippet,
     reset_opencode,
+    warp_snippet,
 )
 
 
@@ -324,3 +325,28 @@ def test_claude_code_snippet_marks_experimental_and_recommends_litellm():
     # LiteLLM block must be there and recommended.
     assert "model_list:" in out
     assert "openai/qwen3-8b-4bit" in out
+
+
+def test_warp_snippet_emits_manual_byok_fields():
+    out = warp_snippet(_ctx())
+    assert out == (
+        "# WARP Terminal custom AI provider\n"
+        "# Paste these values into WARP's BYOK/custom provider settings.\n"
+        "Provider type: OpenAI-compatible\n"
+        "Provider name: mlx-manager:mlx-local:8080\n"
+        "Base URL: http://127.0.0.1:8080/v1\n"
+        "API key: mlx-local\n"
+        "Model: qwen3-8b-4bit\n"
+    )
+
+
+def test_warp_snippet_includes_context_length_when_set():
+    ctx = ProviderContext(
+        base_url="http://127.0.0.1:8080/v1",
+        api_key="dummy-key",
+        provider_name="mlx-local",
+        model_id="qwen3-8b-4bit",
+        context_length=32768,
+    )
+    out = warp_snippet(ctx)
+    assert "Context length: 32768" in out

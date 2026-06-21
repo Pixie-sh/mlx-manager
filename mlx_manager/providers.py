@@ -269,3 +269,23 @@ def claude_code_snippet(ctx: ProviderContext) -> str:
         claude_code_experimental_env(ctx).rstrip(),
     ]
     return "\n".join(parts) + "\n"
+
+
+def warp_snippet(ctx: ProviderContext) -> str:
+    """Return WARP Terminal BYOK/custom-provider setup values.
+
+    WARP's AI provider file format is not stable enough to mutate directly here,
+    so this emits deterministic fields for the WARP settings UI instead.
+    """
+    lines = [
+        "# WARP Terminal custom AI provider",
+        "# Paste these values into WARP's BYOK/custom provider settings.",
+        "Provider type: OpenAI-compatible",
+        f"Provider name: {ctx.provider_name}",
+        f"Base URL: {ctx.base_url}",
+        f"API key: {ctx.api_key}",
+        f"Model: {ctx.model_id}",
+    ]
+    if ctx.context_length:
+        lines.append(f"Context length: {ctx.context_length}")
+    return "\n".join(lines) + "\n"

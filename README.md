@@ -41,6 +41,7 @@ No daemon. No database. No web UI. Just `argparse`, a single state file, an
   - [`benchmark`](#benchmark)
   - [`config opencode`](#config-opencode)
   - [`config claude-code`](#config-claude-code)
+  - [`config warp`](#config-warp)
   - [`config show`](#config-show)
   - [`config edit`](#config-edit)
 - [Exit codes](#exit-codes)
@@ -617,6 +618,39 @@ OpenAI-compatible base-URL routing. mlx-manager therefore does **not** emit
 2. **Experimental — direct env vars.** A small `OPENAI_API_KEY` /
    `OPENAI_BASE_URL` block, labelled experimental, for users who have
    verified OpenAI-compatible routing on their Claude Code build.
+
+### `config warp`
+
+Emit WARP Terminal BYOK/custom-provider setup values for the local MLX
+OpenAI-compatible endpoint.
+
+```bash
+mlx-manager config warp
+mlx-manager config warp --model qwen3-8b-4bit
+mlx-manager config warp --remote
+```
+
+| Flag | Description |
+|------|-------------|
+| `--model ID` | Model id for the snippet (same fallback chain as `config claude-code`). |
+| `--remote` | Use LAN IP in the emitted base URL. |
+
+Sample output:
+
+```text
+# WARP Terminal custom AI provider
+# Paste these values into WARP's BYOK/custom provider settings.
+Provider type: OpenAI-compatible
+Provider name: mlx-local
+Base URL: http://127.0.0.1:8080/v1
+API key: mlx-local
+Model: qwen3-8b-4bit
+```
+
+Use these values in WARP's custom AI provider or BYOK settings. `mlx-manager`
+does not currently modify WARP files directly because WARP's local AI provider
+configuration file schema is not verified here; this keeps user-managed WARP
+settings safe while still providing copy/paste-ready endpoint details.
 
 ### `config show`
 

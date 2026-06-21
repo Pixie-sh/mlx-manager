@@ -34,6 +34,7 @@ from mlx_manager.providers import (
     managed_provider_name,
     opencode_snippet,
     reset_opencode,
+    warp_snippet,
 )
 from mlx_manager import server as srv
 
@@ -269,6 +270,14 @@ def build_parser() -> argparse.ArgumentParser:
     cc = cfg_sub.add_parser("claude-code", help="emit Claude Code / LiteLLM snippet")
     cc.add_argument("--model")
     cc.add_argument(
+        "--remote",
+        action="store_true",
+        help="use LAN IP instead of localhost in emitted config (for remote clients)",
+    )
+
+    wp = cfg_sub.add_parser("warp", help="emit WARP Terminal BYOK/custom-provider values")
+    wp.add_argument("--model")
+    wp.add_argument(
         "--remote",
         action="store_true",
         help="use LAN IP instead of localhost in emitted config (for remote clients)",
@@ -1097,6 +1106,19 @@ def _cmd_config_claude_code(cfg: Config, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_config_warp(cfg: Config, args: argparse.Namespace) -> int:
+    model_id = _pick_provider_model(cfg, args.model)
+    if not model_id:
+        _eprint("error: no model available; pass --model or run `mlx-manager list`")
+        return EXIT_CONFIG
+    remote = getattr(args, "remote", False)
+    ctx = _provider_context(cfg, model_id, remote=remote)
+    if remote:
+        _vprint(f"remote mode: using LAN IP in config", args.verbose)
+    sys.stdout.write(warp_snippet(ctx))
+    return EXIT_OK
+
+
 def _cmd_config_show(cfg: Config, args: argparse.Namespace) -> int:
     """Display current effective config values."""
     if args.as_json:
@@ -1763,6 +1785,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_config_opencode(cfg, args)
         if args.config_cmd == "claude-code":
             return _cmd_config_claude_code(cfg, args)
+        if args.config_cmd == "warp":
+            return _cmd_config_warp(cfg, args)
         if args.config_cmd == "show":
             return _cmd_config_show(cfg, args)
         if args.config_cmd == "edit":

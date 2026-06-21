@@ -104,6 +104,58 @@ def test_config_opencode_emits_json(tmp_path, monkeypatch, capsys, fake_models_r
     assert "mlx-manager:mlx-local:8080" in doc["provider"]
 
 
+def test_config_warp_emits_byok_fields(tmp_path, monkeypatch, capsys, fake_models_root):
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        '[models]\ndirectories = ["{r}"]\ndefault_model = "qwen3-8b-4bit"\n\n'
+        '[server]\nlog_file = "{t}/mlx.log"\npid_file = "{t}/mlx.pid"\n'
+        'state_file = "{t}/state.json"\nlock_file = "{t}/mlx.lock"\n'.format(
+            r=fake_models_root, t=tmp_path
+        )
+    )
+    rc, out, err = _run(
+        monkeypatch,
+        capsys,
+        ["config", "warp", "--model", "qwen3-8b-4bit"],
+        config_path=cfg,
+    )
+    assert rc == 0
+    assert err == ""
+    assert "WARP Terminal custom AI provider" in out
+    assert "Provider type: OpenAI-compatible" in out
+    assert "Base URL: http://127.0.0.1:8080/v1" in out
+    assert "API key: mlx-local" in out
+    assert "Model: qwen3-8b-4bit" in out
+
+
+def test_config_warp_uses_default_model_fallback(tmp_path, monkeypatch, capsys, fake_models_root):
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        '[models]\ndirectories = ["{r}"]\ndefault_model = "qwen3-8b-4bit"\n\n'
+        '[server]\nlog_file = "{t}/mlx.log"\npid_file = "{t}/mlx.pid"\n'
+        'state_file = "{t}/state.json"\nlock_file = "{t}/mlx.lock"\n'.format(
+            r=fake_models_root, t=tmp_path
+        )
+    )
+    rc, out, err = _run(monkeypatch, capsys, ["config", "warp"], config_path=cfg)
+    assert rc == 0
+    assert err == ""
+    assert "Model: qwen3-8b-4bit" in out
+
+
+def test_config_warp_missing_model_exits_config_error(tmp_path, monkeypatch, capsys):
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        '[models]\ndirectories = []\n\n[server]\nlog_file = "{0}/mlx.log"\n'
+        'pid_file = "{0}/mlx.pid"\nstate_file = "{0}/state.json"\n'
+        'lock_file = "{0}/mlx.lock"\n'.format(tmp_path)
+    )
+    rc, out, err = _run(monkeypatch, capsys, ["config", "warp"], config_path=cfg)
+    assert rc == 3
+    assert out == ""
+    assert "no model available" in err
+
+
 def test_config_opencode_running_single_server_name_includes_port(tmp_path, monkeypatch, capsys):
     cfg = tmp_path / "cfg.toml"
     cfg.write_text(

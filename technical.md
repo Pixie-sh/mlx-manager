@@ -84,6 +84,7 @@ BenchmarkSummary(endpoint, model, requests_total, requests_ok, concurrency, wall
 | `logs` | Tail server log | `--tail`, `-f` | 0, 4 |
 | `config opencode` | Print provider snippet | `--model`, `--format`, `--apply`, `--overwrite` | 0, 3 |
 | `config claude-code` | Print Claude/LiteLLM snippet | `--model` | 0, 3 |
+| `config warp` | Print WARP BYOK/custom-provider values | `--model`, `--remote` | 0, 3 |
 | `doctor` | Run diagnostics and optional safe fixes | `--json`, `--fix` | 0, 1 |
 | `bot` | Chat with a local troubleshooting assistant | `--model`, `--choose`, `--max-tokens`, `--temperature`, `--no-context` | 0, 1, 7 |
 | `benchmark` | Measure performance | `--model`, `--endpoint`, `--prompt`, `--max-tokens`, `--requests`, `--concurrency`, `--warmup`, `--json` | 0, 1 |
@@ -352,6 +353,25 @@ Claude Code doesn't document OpenAI-compatible base-URL routing (verified May 20
          api_base: http://127.0.0.1:8080/v1
          api_key: mlx-local
    ```
+
+### WARP Terminal (Manual BYOK)
+
+WARP setup emits deterministic OpenAI-compatible fields for the WARP custom
+provider/BYOK settings UI:
+
+```text
+# WARP Terminal custom AI provider
+# Paste these values into WARP's BYOK/custom provider settings.
+Provider type: OpenAI-compatible
+Provider name: mlx-local
+Base URL: http://127.0.0.1:8080/v1
+API key: mlx-local
+Model: qwen3-8b-4bit
+```
+
+The implementation intentionally does not write WARP config files. The local AI
+provider file schema is not verified, so snippet output is the safe integration
+surface until a stable schema and ownership marker strategy are available.
 
 ---
 
