@@ -15,20 +15,12 @@ if [ "$OS" != "Darwin" ] || [ "$ARCH" != "arm64" ]; then
   exit 1
 fi
 
-if ! command -v curl >/dev/null 2>&1; then
-  echo "curl is required to install mlx-manager." >&2
-  exit 1
-fi
-
-if ! command -v shasum >/dev/null 2>&1; then
-  echo "shasum is required to verify the mlx-manager download." >&2
-  exit 1
-fi
-
-if ! command -v tar >/dev/null 2>&1; then
-  echo "tar is required to unpack mlx-manager." >&2
-  exit 1
-fi
+for cmd in awk curl grep install shasum tar; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "$cmd is required to install mlx-manager." >&2
+    exit 1
+  fi
+done
 
 if [ "$VERSION" = "latest" ]; then
   BASE_URL="https://github.com/$REPO/releases/latest/download"
@@ -45,8 +37,17 @@ trap cleanup EXIT INT TERM
 ARCHIVE="$TMP_DIR/$ARTIFACT"
 CHECKSUMS="$TMP_DIR/checksums.txt"
 
-curl -fsSL "$BASE_URL/$ARTIFACT" -o "$ARCHIVE"
-curl -fsSL "$BASE_URL/checksums.txt" -o "$CHECKSUMS"
+if ! curl -fsL "$BASE_URL/$ARTIFACT" -o "$ARCHIVE"; then
+  echo "Failed to download $ARTIFACT from $BASE_URL." >&2
+  echo "The requested release asset may not exist yet. Use pipx instead: pipx install mlx-manager" >&2
+  exit 1
+fi
+
+if ! curl -fsL "$BASE_URL/checksums.txt" -o "$CHECKSUMS"; then
+  echo "Failed to download checksums.txt from $BASE_URL." >&2
+  echo "The requested release may be missing checksum assets." >&2
+  exit 1
+fi
 
 EXPECTED="$(grep "  $ARTIFACT$" "$CHECKSUMS" | awk '{print $1}')"
 if [ -z "$EXPECTED" ]; then
