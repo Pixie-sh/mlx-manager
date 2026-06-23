@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import tomli_w
-
 from mlxer.paths import ensure_parent, expand
 
 DEFAULT_CONFIG_PATH = "~/.config/mlxer/config.toml"
@@ -134,7 +132,7 @@ def write_default(path: Path) -> None:
     """Write the default config TOML to *path* (creating parents)."""
     ensure_parent(path)
     with open(path, "wb") as f:
-        tomli_w.dump(_DEFAULTS, f)
+        _dump_toml(_DEFAULTS, f)
 
 
 def update_value(path: str | Path, table: str, key: str, value: Any) -> None:
@@ -153,7 +151,13 @@ def update_value(path: str | Path, table: str, key: str, value: Any) -> None:
     _validate(raw)
     ensure_parent(p)
     with open(p, "wb") as f:
-        tomli_w.dump(raw, f)
+        _dump_toml(raw, f)
+
+
+def _dump_toml(data: dict[str, Any], fp: Any) -> None:
+    import tomli_w
+
+    tomli_w.dump(data, fp)
 
 
 def _validate(raw: dict[str, Any]) -> None:
