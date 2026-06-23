@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import sys
 
-from mlx_manager import cli
+from mlxer import cli
 
 
 def test_pipx_app_name_detects_venv(monkeypatch):
-    monkeypatch.setattr(sys, "prefix", "/opt/pipx/venvs/mlx-manager")
-    assert cli._pipx_app_name() == "mlx-manager"
+    monkeypatch.setattr(sys, "prefix", "/opt/pipx/venvs/mlxer")
+    assert cli._pipx_app_name() == "mlxer"
 
 
 def test_pipx_app_name_none_for_regular_venv(monkeypatch):
@@ -16,9 +16,9 @@ def test_pipx_app_name_none_for_regular_venv(monkeypatch):
 
 
 def test_install_cmd_uses_pipx_inject_when_isolated(monkeypatch):
-    monkeypatch.setattr(cli, "_pipx_app_name", lambda: "mlx-manager")
+    monkeypatch.setattr(cli, "_pipx_app_name", lambda: "mlxer")
     monkeypatch.setattr(cli.shutil, "which", lambda _name: "/opt/homebrew/bin/pipx")
-    assert cli._mlx_lm_install_cmd() == ["pipx", "inject", "mlx-manager", "mlx-lm"]
+    assert cli._mlx_lm_install_cmd() == ["pipx", "inject", "mlxer", "mlx-lm"]
 
 
 def test_install_cmd_falls_back_to_pip(monkeypatch):
@@ -27,7 +27,7 @@ def test_install_cmd_falls_back_to_pip(monkeypatch):
 
 
 def test_install_cmd_pip_when_pipx_missing(monkeypatch):
-    monkeypatch.setattr(cli, "_pipx_app_name", lambda: "mlx-manager")
+    monkeypatch.setattr(cli, "_pipx_app_name", lambda: "mlxer")
     monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
     assert cli._mlx_lm_install_cmd() == [sys.executable, "-m", "pip", "install", "mlx-lm"]
 
@@ -59,7 +59,7 @@ def test_doctor_fix_installs_when_bot_runtime_missing(monkeypatch, capsys, cfg_f
 def test_doctor_fix_repoints_server_python_when_default_lacks_mlx_lm(
     monkeypatch, tmp_path, capsys
 ):
-    from mlx_manager.config import load
+    from mlxer.config import load
 
     cfg_path = tmp_path / "cfg.toml"
     cfg_path.write_text(
@@ -111,7 +111,7 @@ def test_doctor_skips_wired_limit_off_darwin(monkeypatch, cfg_factory):
 def test_doctor_fix_advises_when_custom_server_python_lacks_mlx_lm(
     monkeypatch, tmp_path, capsys
 ):
-    from mlx_manager.config import load
+    from mlxer.config import load
 
     cfg_path = tmp_path / "cfg.toml"
     cfg_path.write_text(

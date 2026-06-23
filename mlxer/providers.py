@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 
-MANAGED_PROVIDER_PREFIX = "mlx-manager:"
+MANAGED_PROVIDER_PREFIX = "mlxer:"
+_OLD_MANAGED_PROVIDER_PREFIX = "mlx" + "-manager:"
 
 
 @dataclass(frozen=True)
@@ -27,21 +28,23 @@ class ApplyError(Exception):
 
 
 def managed_provider_name(provider_name: str) -> str:
-    """Return the OpenCode provider key reserved for mlx-manager entries."""
+    """Return the OpenCode provider key reserved for mlxer entries."""
     if provider_name.startswith(MANAGED_PROVIDER_PREFIX):
         return provider_name
+    if provider_name.startswith(_OLD_MANAGED_PROVIDER_PREFIX):
+        return f"{MANAGED_PROVIDER_PREFIX}{provider_name[len(_OLD_MANAGED_PROVIDER_PREFIX):]}"
     return f"{MANAGED_PROVIDER_PREFIX}{provider_name}"
 
 
 def is_managed_provider_name(provider_name: str) -> bool:
-    """Return True when *provider_name* is an mlx-manager managed provider key."""
-    return provider_name.startswith(MANAGED_PROVIDER_PREFIX)
+    """Return True when *provider_name* is a mlxer managed provider key."""
+    return provider_name.startswith((MANAGED_PROVIDER_PREFIX, _OLD_MANAGED_PROVIDER_PREFIX))
 
 
 def _legacy_provider_candidates(managed_name: str) -> list[str]:
-    """Return possible pre-`mlx-manager:` keys that this managed name replaces.
+    """Return possible pre-`mlxer:` keys that this managed name replaces.
 
-    ``"mlx-manager:mlx-local:8080"`` → ``["mlx-local:8080", "mlx-local"]``.
+    ``"mlxer:mlx-local:8080"`` -> ``["mlx-local:8080", "mlx-local"]``.
     Used by :func:`apply_opencode` to migrate users who already had a bare
     ``mlx-local`` provider block pointing at our server. The trailing port form
     is included first so callers can match against the most specific candidate.
@@ -49,7 +52,7 @@ def _legacy_provider_candidates(managed_name: str) -> list[str]:
     if not managed_name.startswith(MANAGED_PROVIDER_PREFIX):
         return []
     stripped = managed_name[len(MANAGED_PROVIDER_PREFIX):]
-    candidates = [stripped]
+    candidates = [f"{_OLD_MANAGED_PROVIDER_PREFIX}{stripped}", stripped]
     head, sep, tail = stripped.rpartition(":")
     if sep and head and tail.isdigit():
         candidates.append(head)
@@ -105,7 +108,7 @@ def _merge_opencode_provider(existing: dict, new_block: dict) -> dict:
     """Merge *new_block* into *existing*, preserving user-tuned per-model fields.
 
     - ``npm``, ``name``, ``options`` are refreshed from *new_block* (these are
-      the bits mlx-manager owns).
+      the bits mlxer owns).
     - ``models`` is union'd: model ids only present in *new_block* are added;
       model ids already present keep their existing definition entirely
       (so hand-tuned ``limit``, ``name`` overrides, etc. survive).
@@ -152,7 +155,7 @@ def apply_opencode(
 
     actions: list[str] = []
     for c in contexts:
-        # Migrate any pre-`mlx-manager:` block that points at the same backend.
+        # Migrate any pre-`mlxer:` block that points at the same backend.
         # The baseURL fingerprint check protects users who manually curated a
         # `mlx-local` provider against a different server.
         for legacy in _legacy_provider_candidates(c.provider_name):
@@ -186,7 +189,7 @@ def apply_opencode(
 
 
 def reset_opencode(target: Path) -> str:
-    """Remove mlx-manager managed OpenCode provider entries from *target*."""
+    """Remove mlxer managed OpenCode provider entries from *target*."""
     target = Path(target)
     if not target.exists():
         return f"no OpenCode config found at {target}"
@@ -204,7 +207,7 @@ def reset_opencode(target: Path) -> str:
 
     removed = [name for name in providers if is_managed_provider_name(name)]
     if not removed:
-        return f"0 mlx-manager provider(s) removed from {target}"
+        return f"0 mlxer provider(s) removed from {target}"
 
     for name in removed:
         del providers[name]
@@ -216,7 +219,7 @@ def reset_opencode(target: Path) -> str:
         json.dump(doc, f, indent=2)
         f.write("\n")
     os.replace(tmp, target)
-    return f"{len(removed)} mlx-manager provider(s) removed from {target}"
+    return f"{len(removed)} mlxer provider(s) removed from {target}"
 
 
 def claude_code_experimental_env(ctx: ProviderContext) -> str:

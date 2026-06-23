@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in `mlx-manager`. The project is intentionally
+Thanks for your interest in `mlxer`. The project is intentionally
 small and easy to keep in your head — please keep PRs in that spirit.
 
 ## Ground rules
@@ -9,7 +9,7 @@ small and easy to keep in your head — please keep PRs in that spirit.
   default config). Don't introduce new runtime deps without discussing it
   in an issue first. Test-only deps go under `[project.optional-dependencies]`
   (`dev`).
-- **No daemons, no database, no web UI.** mlx-manager is a CLI wrapper.
+- **No daemons, no database, no web UI.** mlxer is a CLI wrapper.
 - **Apple Silicon / macOS is the supported target.** Other platforms might
   work but aren't tested.
 
@@ -17,7 +17,7 @@ small and easy to keep in your head — please keep PRs in that spirit.
 
 ```bash
 git clone <this-repo>
-cd mlx-manager
+cd mlxer
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 pytest -q
@@ -34,7 +34,7 @@ walks for HF-cache discovery) is faked through `tests/conftest.py`.
 2. **Branch off `main`** with a short descriptive name
    (`fix/stop-rejects-recycled-pid`, `feat/info-command`, …).
 3. **Add or update tests** under `tests/` for every behaviour change. A
-   PR that touches `mlx_manager/` without a corresponding test change is
+   PR that touches `mlxer/` without a corresponding test change is
    almost certainly missing something.
 4. **Run `pytest -q`** locally before pushing. PRs are expected to be green.
 5. **Keep commits focused.** Squash trivia (`oops`, `wip`) before review.
@@ -58,7 +58,7 @@ Please include:
 - macOS version and Apple Silicon chip generation (`uname -srm`).
 - Python version (`python3 --version`).
 - `mlx_lm` version (`pip show mlx-lm`).
-- The output of `mlx-manager --version` and `mlx-manager doctor`.
+- The output of `mlxer --version` and `mlxer doctor`.
 - A minimal reproducer.
 
 ## Security

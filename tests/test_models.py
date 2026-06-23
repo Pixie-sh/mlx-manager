@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from mlx_manager.config import ModelsCfg
-from mlx_manager.models import discover, discover_with_skipped, resolve
+from mlxer.config import ModelsCfg
+from mlxer.models import discover, discover_with_skipped, resolve
 
 
 def test_discover_plain_directory(fake_models_root):

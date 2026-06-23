@@ -1,4 +1,4 @@
-from mlx_manager.cli import main
+from mlxer.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

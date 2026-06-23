@@ -19,9 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from mlx_manager.config import Config
-from mlx_manager.models import Model
-from mlx_manager.paths import ensure_parent, expand
+from mlxer.config import Config
+from mlxer.models import Model
+from mlxer.paths import ensure_parent, expand
 
 LOCK_ACQUIRE_TIMEOUT_S = 10.0
 READINESS_PROBE_INTERVAL_S = 0.5
@@ -537,7 +537,7 @@ def serving_invocation(model: Model) -> tuple[str, Path | None]:
     - Filesystem models (``directory``/``alias``): pass the directory basename
       and set ``cwd`` to its parent. ``Path(basename)`` then resolves locally,
       so ``mlx_lm`` loads it without going through Hugging Face — and the API
-      id becomes the basename (matches ``mlx-manager list`` output).
+      id becomes the basename (matches ``mlxer list`` output).
     - HF-cache models: pass ``<org>/<name>`` directly and let ``mlx_lm``'s HF
       resolver locate it in the local cache. No ``cwd`` needed.
     """

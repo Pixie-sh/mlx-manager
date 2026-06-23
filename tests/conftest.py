@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from mlx_manager.config import BotCfg, Config, ModelsCfg, ProvidersCfg, ServerCfg
+from mlxer.config import BotCfg, Config, ModelsCfg, ProvidersCfg, ServerCfg
 
 
 def _make_model_dir(root: Path, name: str, *, sharded: bool = False) -> Path:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from mlx_manager.providers import (
+from mlxer.providers import (
     ApplyError,
     MANAGED_PROVIDER_PREFIX,
     ProviderContext,
@@ -23,7 +23,7 @@ def _ctx() -> ProviderContext:
     return ProviderContext(
         base_url="http://127.0.0.1:8080/v1",
         api_key="mlx-local",
-        provider_name="mlx-manager:mlx-local:8080",
+        provider_name="mlxer:mlx-local:8080",
         model_id="qwen3-8b-4bit",
     )
 
@@ -33,7 +33,7 @@ def test_opencode_merge_snippet_exact_shape():
     doc = json.loads(out)
     assert doc == {
         "provider": {
-            "mlx-manager:mlx-local:8080": {
+            "mlxer:mlx-local:8080": {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "MLX Local",
                 "options": {
@@ -49,7 +49,7 @@ def test_opencode_merge_snippet_exact_shape():
 def test_opencode_snippet_omits_context_length_when_none():
     out = opencode_snippet(_ctx(), format="merge")
     doc = json.loads(out)
-    model_def = doc["provider"]["mlx-manager:mlx-local:8080"]["models"]["qwen3-8b-4bit"]
+    model_def = doc["provider"]["mlxer:mlx-local:8080"]["models"]["qwen3-8b-4bit"]
     assert "contextLength" not in model_def
 
 
@@ -57,20 +57,21 @@ def test_opencode_snippet_includes_context_length_when_set():
     ctx = ProviderContext(
         base_url="http://127.0.0.1:8080/v1",
         api_key="mlx-local",
-        provider_name="mlx-manager:mlx-local:8080",
+        provider_name="mlxer:mlx-local:8080",
         model_id="qwen3-8b-4bit",
         context_length=32768,
     )
     out = opencode_snippet(ctx, format="merge")
     doc = json.loads(out)
-    model_def = doc["provider"]["mlx-manager:mlx-local:8080"]["models"]["qwen3-8b-4bit"]
+    model_def = doc["provider"]["mlxer:mlx-local:8080"]["models"]["qwen3-8b-4bit"]
     assert model_def["contextLength"] == 32768
 
 
-def test_managed_provider_name_marks_mlx_manager_entries():
-    assert MANAGED_PROVIDER_PREFIX == "mlx-manager:"
-    assert managed_provider_name("mlx-local") == "mlx-manager:mlx-local"
-    assert managed_provider_name("mlx-manager:mlx-local") == "mlx-manager:mlx-local"
+def test_managed_provider_name_marks_mlxer_entries():
+    assert MANAGED_PROVIDER_PREFIX == "mlxer:"
+    assert managed_provider_name("mlx-local") == "mlxer:mlx-local"
+    assert managed_provider_name("mlxer:mlx-local") == "mlxer:mlx-local"
+    assert managed_provider_name("mlx" + "-manager:mlx-local") == "mlxer:mlx-local"
 
 
 def test_opencode_full_snippet_includes_schema():
@@ -105,8 +106,8 @@ def test_apply_creates_file_with_schema(tmp_path):
     assert "added" in summary
     doc = json.loads(target.read_text())
     assert doc["$schema"] == "https://opencode.ai/config.json"
-    assert doc["provider"]["mlx-manager:mlx-local:8080"]["options"]["baseURL"] == "http://127.0.0.1:8080/v1"
-    assert "qwen3-8b-4bit" in doc["provider"]["mlx-manager:mlx-local:8080"]["models"]
+    assert doc["provider"]["mlxer:mlx-local:8080"]["options"]["baseURL"] == "http://127.0.0.1:8080/v1"
+    assert "qwen3-8b-4bit" in doc["provider"]["mlxer:mlx-local:8080"]["models"]
 
 
 def test_apply_merge_preserves_user_per_model_tuning(tmp_path):
@@ -118,7 +119,7 @@ def test_apply_merge_preserves_user_per_model_tuning(tmp_path):
                 "$schema": "https://opencode.ai/config.json",
                 "permission": {"edit": "ask"},
                 "provider": {
-                    "mlx-manager:mlx-local:8080": {
+                    "mlxer:mlx-local:8080": {
                         "npm": "old-package",
                         "name": "stale display",
                         "options": {"baseURL": "http://old:1234/v1", "apiKey": "x"},
@@ -139,8 +140,8 @@ def test_apply_merge_preserves_user_per_model_tuning(tmp_path):
     doc = json.loads(target.read_text())
     # Outer keys untouched.
     assert doc["permission"] == {"edit": "ask"}
-    prov = doc["provider"]["mlx-manager:mlx-local:8080"]
-    # mlx-manager-owned fields are refreshed.
+    prov = doc["provider"]["mlxer:mlx-local:8080"]
+    # mlxer-owned fields are refreshed.
     assert prov["npm"] == "@ai-sdk/openai-compatible"
     assert prov["options"]["baseURL"] == "http://127.0.0.1:8080/v1"
     # User-tuned per-model fields survive.
@@ -154,7 +155,7 @@ def test_apply_overwrite_replaces_provider_block(tmp_path):
         json.dumps(
             {
                 "provider": {
-                    "mlx-manager:mlx-local:8080": {
+                    "mlxer:mlx-local:8080": {
                         "npm": "old",
                         "name": "stale",
                         "options": {"baseURL": "http://old", "apiKey": "x"},
@@ -171,8 +172,8 @@ def test_apply_overwrite_replaces_provider_block(tmp_path):
     # Other providers are untouched.
     assert doc["provider"]["other"] == {"npm": "keep me"}
     # Our provider is reset — old-model and its limit are gone.
-    assert "old-model" not in doc["provider"]["mlx-manager:mlx-local:8080"]["models"]
-    assert "qwen3-8b-4bit" in doc["provider"]["mlx-manager:mlx-local:8080"]["models"]
+    assert "old-model" not in doc["provider"]["mlxer:mlx-local:8080"]["models"]
+    assert "qwen3-8b-4bit" in doc["provider"]["mlxer:mlx-local:8080"]["models"]
 
 
 def test_apply_writes_backup(tmp_path):
@@ -187,7 +188,7 @@ def test_apply_writes_backup(tmp_path):
 
 def test_apply_migrates_matching_legacy_bare_key(tmp_path):
     target = tmp_path / "opencode.json"
-    ctx = _ctx()  # provider_name == "mlx-manager:mlx-local:8080", base_url 8080.
+    ctx = _ctx()  # provider_name == "mlxer:mlx-local:8080", base_url 8080.
     target.write_text(
         json.dumps(
             {
@@ -209,7 +210,36 @@ def test_apply_migrates_matching_legacy_bare_key(tmp_path):
     summary = apply_opencode(ctx, target)
     doc = json.loads(target.read_text())
     assert "mlx-local" not in doc["provider"]
-    assert "mlx-manager:mlx-local:8080" in doc["provider"]
+    assert "mlxer:mlx-local:8080" in doc["provider"]
+    assert doc["provider"]["anthropic"] == {"npm": "keep"}
+    assert "migrated" in summary
+
+
+def test_apply_migrates_matching_old_managed_key(tmp_path):
+    target = tmp_path / "opencode.json"
+    ctx = _ctx()
+    target.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "mlx" + "-manager:mlx-local:8080": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "MLX Local",
+                        "options": {
+                            "baseURL": ctx.base_url,
+                            "apiKey": "stale",
+                        },
+                        "models": {"qwen3-8b-4bit": {"name": "qwen3-8b-4bit"}},
+                    },
+                    "anthropic": {"npm": "keep"},
+                },
+            }
+        )
+    )
+    summary = apply_opencode(ctx, target)
+    doc = json.loads(target.read_text())
+    assert "mlx" + "-manager:mlx-local:8080" not in doc["provider"]
+    assert "mlxer:mlx-local:8080" in doc["provider"]
     assert doc["provider"]["anthropic"] == {"npm": "keep"}
     assert "migrated" in summary
 
@@ -240,18 +270,19 @@ def test_apply_preserves_unrelated_legacy_bare_key(tmp_path):
     doc = json.loads(target.read_text())
     assert "mlx-local" in doc["provider"]
     assert doc["provider"]["mlx-local"]["options"]["baseURL"] == "http://localhost:9999/v1"
-    assert "mlx-manager:mlx-local:8080" in doc["provider"]
+    assert "mlxer:mlx-local:8080" in doc["provider"]
     assert "migrated" not in summary
 
 
-def test_reset_removes_only_mlx_manager_providers(tmp_path):
+def test_reset_removes_only_mlxer_providers(tmp_path):
     target = tmp_path / "opencode.json"
     target.write_text(
         json.dumps(
             {
                 "provider": {
-                    "mlx-manager:mlx-local:8080": {"npm": "remove"},
-                    "mlx-manager:mlx-local@studio:8081": {"npm": "remove too"},
+                    "mlxer:mlx-local:8080": {"npm": "remove"},
+                    "mlxer:mlx-local@studio:8081": {"npm": "remove too"},
+                    "mlx" + "-manager:mlx-local:8082": {"npm": "remove old too"},
                     "mlx-local": {"npm": "keep"},
                     "anthropic": {"npm": "keep"},
                 },
@@ -260,7 +291,7 @@ def test_reset_removes_only_mlx_manager_providers(tmp_path):
         )
     )
     summary = reset_opencode(target)
-    assert "2 mlx-manager provider(s) removed" in summary
+    assert "3 mlxer provider(s) removed" in summary
     doc = json.loads(target.read_text())
     assert doc["provider"] == {
         "mlx-local": {"npm": "keep"},
@@ -274,7 +305,7 @@ def test_reset_is_idempotent(tmp_path):
     original = {"provider": {"anthropic": {"npm": "keep"}}}
     target.write_text(json.dumps(original))
     summary = reset_opencode(target)
-    assert "0 mlx-manager provider(s) removed" in summary
+    assert "0 mlxer provider(s) removed" in summary
     assert json.loads(target.read_text()) == original
 
 
@@ -291,7 +322,7 @@ def test_reset_writes_backup_when_managed_providers_removed(tmp_path):
     target = tmp_path / "opencode.json"
     original = {
         "provider": {
-            "mlx-manager:mlx-local:8080": {"npm": "remove"},
+            "mlxer:mlx-local:8080": {"npm": "remove"},
             "anthropic": {"npm": "keep"},
         }
     }
@@ -333,7 +364,7 @@ def test_warp_snippet_emits_manual_byok_fields():
         "# WARP Terminal custom AI provider\n"
         "# Paste these values into WARP's BYOK/custom provider settings.\n"
         "Provider type: OpenAI-compatible\n"
-        "Provider name: mlx-manager:mlx-local:8080\n"
+        "Provider name: mlxer:mlx-local:8080\n"
         "Base URL: http://127.0.0.1:8080/v1\n"
         "API key: mlx-local\n"
         "Model: qwen3-8b-4bit\n"

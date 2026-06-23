@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mlx_manager import cli
+from mlxer import cli
 
 
 def _write_cfg(path: Path, tmp_path: Path, models_root: Path | None) -> None:
@@ -202,9 +202,9 @@ def test_load_prompt_yes_applies_opencode(
     import json as _json
 
     doc = _json.loads(target.read_text())
-    # Provider key carries the mlx-manager: prefix and :port suffix.
+    # Provider key carries the mlxer: prefix and :port suffix.
     keys = list(doc["provider"].keys())
-    assert any(k.startswith("mlx-manager:") and k.endswith(":18080") for k in keys)
+    assert any(k.startswith("mlxer:") and k.endswith(":18080") for k in keys)
     # Default sub-prompt mode is merge → no Claude Code snippet block printed.
     assert "Claude Code (LiteLLM) snippet" not in out
 
@@ -220,7 +220,7 @@ def test_load_prompt_yes_with_overwrite_and_claude_code(
     target = tmp_path / "opencode.json"
     # Pre-seed an existing provider block to confirm overwrite resets it.
     target.write_text(
-        '{"provider": {"mlx-manager:mlx-local:18080": '
+        '{"provider": {"mlxer:mlx-local:18080": '
         '{"npm": "stale", "models": {"old-model": {"name": "old-model"}}}}}'
     )
     monkeypatch.setattr(
@@ -241,7 +241,7 @@ def test_load_prompt_yes_with_overwrite_and_claude_code(
     assert "model_name:" in out  # LiteLLM yaml marker
     import json as _json
     doc = _json.loads(target.read_text())
-    block = doc["provider"]["mlx-manager:mlx-local:18080"]
+    block = doc["provider"]["mlxer:mlx-local:18080"]
     # Overwrite wiped the legacy `old-model` entry.
     assert "old-model" not in block["models"]
     assert "qwen3-8b-4bit" in block["models"]

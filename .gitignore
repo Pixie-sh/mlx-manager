@@ -45,7 +45,7 @@ ENV/
 *.swo
 .DS_Store
 
-# mlx-manager runtime (in case anyone configures the project dir as state dir)
+# mlxer runtime (in case anyone configures the project dir as state dir)
 *.log
 *.pid
 *.bak

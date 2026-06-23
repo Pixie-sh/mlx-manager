@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from mlx_manager import bot as bot_mod
+from mlxer import bot as bot_mod
 
 
 def _make_model(path):

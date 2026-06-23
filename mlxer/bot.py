@@ -4,14 +4,14 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from mlx_manager.paths import ensure_dir, expand
+from mlxer.paths import ensure_dir, expand
 
 BASE_SYSTEM_PROMPT = (
-    "You are the mlx-manager bot, a small on-device assistant embedded in the "
-    "mlx-manager CLI — a headless controller for MLX language-model servers on "
+    "You are the mlxer bot, a small on-device assistant embedded in the "
+    "mlxer CLI — a headless controller for MLX language-model servers on "
     "Apple Silicon. You help the user inspect and fix issues with their local "
     "MLX servers. Be concise and practical. When a server is unhealthy, explain "
-    "the likely cause and suggest concrete mlx-manager commands (start, stop, "
+    "the likely cause and suggest concrete mlxer commands (start, stop, "
     "restart, switch, status, logs, doctor, list, info) to resolve it. Prefer "
     "short answers. If you are unsure, say so rather than inventing details."
 )
@@ -61,7 +61,7 @@ def build_system_prompt(
     return "\n\n".join(
         [
             BASE_SYSTEM_PROMPT,
-            "--- current mlx-manager state ---",
+            "--- current mlxer state ---",
             _format_status_block(status_dicts),
             _format_doctor_block(doctor_results),
         ]
@@ -238,7 +238,7 @@ def run(
     except ImportError:
         on_status(
             "error: mlx_lm is not importable in this environment (the bot runs "
-            "it in-process). Run `mlx-manager doctor --fix` to install it here."
+            "it in-process). Run `mlxer doctor --fix` to install it here."
         )
         return 7
 

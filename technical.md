@@ -1,4 +1,4 @@
-# mlx-manager — Technical Knowledge Base
+# mlxer Technical Knowledge Base
 
 > Maintainer reference. Project version 0.1.0. MIT license. Author: rs. The README and source code are canonical when details differ.
 
@@ -6,7 +6,7 @@
 
 ## 1. Project Overview
 
-**mlx-manager** is a Python CLI tool (v0.1.0) that wraps `mlx_lm server` to run a local MLX HTTP server headlessly on Apple Silicon Macs. Designed for SSH-only headless machines where you need to manage local LLM inference without a GUI.
+**mlxer** is a Python CLI tool (v0.1.0) that wraps `mlx_lm server` to run a local MLX HTTP server headlessly on Apple Silicon Macs. Designed for SSH-only headless machines where you need to manage local LLM inference without a GUI.
 
 | Attribute | Value |
 |-----------|-------|
@@ -108,7 +108,7 @@ BenchmarkSummary(endpoint, model, requests_total, requests_ok, concurrency, wall
 
 ### Config File Location
 
-Default: `~/.config/mlx-manager/config.toml` (auto-created on first run)
+Default: `~/.config/mlxer/config.toml` (auto-created on first run)
 
 ### TOML Schema
 
@@ -118,8 +118,8 @@ host = "127.0.0.1"              # Default bind address
 port = 8080                      # Default port (1024-65535 validated)
 log_file = "~/services/mlx/logs/mlx-lm.server.log"
 pid_file = "~/services/mlx/mlx-lm.server.pid"
-state_file = "~/.local/state/mlx-manager/state.json"
-lock_file = "~/.local/state/mlx-manager/lock"
+state_file = "~/.local/state/mlxer/state.json"
+lock_file = "~/.local/state/mlxer/lock"
 python_executable = "python3"    # Which Python to use
 extra_args = []                  # Forwarded to mlx_lm.server verbatim
 startup_timeout_seconds = 120    # Max wait for server readiness
@@ -130,7 +130,7 @@ patch_tool_calls = true          # Best-effort shim for truncated tool calls
 
 [models]
 directories = [                  # Roots to scan for models
-  "~/.mlx-manager/models",
+  "~/.mlxer/models",
   "~/.models/mlx",
   "~/models/mlx",
   "~/.cache/huggingface/hub",
@@ -148,7 +148,7 @@ provider_name = "mlx-local"      # Provider label
 
 [bot]
 model = "mlx-community/gemma-4-e2b-it-4bit"
-cache_dir = "~/.mlx-manager/bot"
+cache_dir = "~/.mlxer/bot"
 max_tokens = 1024
 temperature = 0.7
 ```
@@ -254,7 +254,7 @@ When `start --model X` is called, resolve `X` in this order:
 
 ### Serving Invocation (`serving_invocation()`)
 
-The `serving_invocation(model)` function in `server.py` determines how to pass the model to `mlx_lm server` so the HTTP API exposes the same id string that `mlx-manager list` shows and that clients use in the `model` JSON field.
+The `serving_invocation(model)` function in `server.py` determines how to pass the model to `mlx_lm server` so the HTTP API exposes the same id string that `mlxer list` shows and that clients use in the `model` JSON field.
 
 - **Filesystem models** (`directory`/`alias` source): passes the directory basename as `--model <basename>` and sets `cwd` to the parent directory. `Path(basename)` then resolves locally within that cwd, so `mlx_lm` loads the model without contacting HuggingFace — and the API id becomes the basename.
 - **HF-cache models** (`hf_cache` source): passes `<org>/<name>` directly as `--model <org>/<name>` with no cwd change. `mlx_lm`'s built-in HF resolver locates the snapshot in the local cache.
@@ -282,7 +282,7 @@ If any check fails, the operation is refused. This prevents killing unrelated pr
 ### Lock Mechanism
 
 - Uses `fcntl.flock()` for exclusive file locking
-- Lock file at `~/.local/state/mlx-manager/lock`
+- Lock file at `~/.local/state/mlxer/lock`
 - 10-second acquisition timeout
 - Automatically released on completion or error
 - Prevents concurrent `start`/`stop`/`restart` from corrupting state
@@ -471,7 +471,7 @@ surface until a stable schema and ownership marker strategy are available.
 ### Design Assumptions
 
 - Target platform is Darwin/arm64 (Apple Silicon)
-- `mlx_lm` is installed in the same interpreter mlx-manager uses
+- `mlx_lm` is installed in the same interpreter mlxer uses
 - SSH-only headless access pattern
 - Single-user scenario (no multi-tenancy)
 - Serving models are pre-loaded locally; the bot assistant model may download once
@@ -482,12 +482,12 @@ surface until a stable schema and ownership marker strategy are available.
 ## Appendix: File Inventory
 
 ```
-mlx-manager/
+mlxer/
 ├── pyproject.toml          # Build config, dependencies, entry point
 ├── README.md               # User documentation
-├── mlx_manager/
+├── mlxer/
 │   ├── __init__.py         # Version string
-│   ├── __main__.py         # python -m mlx_manager entry
+│   ├── __main__.py         # python -m mlxer entry
 │   ├── cli.py              # CLI dispatch and command handlers
 │   ├── config.py           # TOML config loading/writing
 │   ├── models.py           # Model discovery + resolution

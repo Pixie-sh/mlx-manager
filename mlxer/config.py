@@ -7,9 +7,9 @@ from typing import Any
 
 import tomli_w
 
-from mlx_manager.paths import ensure_parent, expand
+from mlxer.paths import ensure_parent, expand
 
-DEFAULT_CONFIG_PATH = "~/.config/mlx-manager/config.toml"
+DEFAULT_CONFIG_PATH = "~/.config/mlxer/config.toml"
 
 _DEFAULTS: dict[str, Any] = {
     "server": {
@@ -17,8 +17,8 @@ _DEFAULTS: dict[str, Any] = {
         "port": 8080,
         "log_file": "~/services/mlx/logs/mlx-lm.server.log",
         "pid_file": "~/services/mlx/mlx-lm.server.pid",
-        "state_file": "~/.local/state/mlx-manager/state.json",
-        "lock_file": "~/.local/state/mlx-manager/lock",
+        "state_file": "~/.local/state/mlxer/state.json",
+        "lock_file": "~/.local/state/mlxer/lock",
         "python_executable": "python3",
         "extra_args": [],
         "startup_timeout_seconds": 120,
@@ -31,7 +31,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     "models": {
         "directories": [
-            "~/.mlx-manager/models",
+            "~/.mlxer/models",
             "~/.models/mlx",
             "~/models/mlx",
             "~/.cache/huggingface/hub",
@@ -47,7 +47,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     "bot": {
         "model": "mlx-community/gemma-4-e2b-it-4bit",
-        "cache_dir": "~/.mlx-manager/bot",
+        "cache_dir": "~/.mlxer/bot",
         "max_tokens": 1024,
         "temperature": 0.7,
     },
@@ -214,7 +214,7 @@ def _validate(raw: dict[str, Any]) -> None:
 
 
 def load(path: str | Path | None = None) -> Config:
-    """Load config from *path* (default ``~/.config/mlx-manager/config.toml``).
+    """Load config from *path* (default ``~/.config/mlxer/config.toml``).
 
     Creates a default config on first use. Unknown tables/keys raise ConfigError.
     """

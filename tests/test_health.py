@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mlx_manager import server as srv
+from mlxer import server as srv
 
 _DEEPSEEK_LOG = """\
 2026-05-28 10:56:11,064 - INFO - Starting httpd at 0.0.0.0 on port 1236...

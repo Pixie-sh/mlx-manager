@@ -13,20 +13,20 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from mlx_manager import __version__
-from mlx_manager import benchmark as bench
-from mlx_manager import bot as bot_mod
-from mlx_manager.config import (
+from mlxer import __version__
+from mlxer import benchmark as bench
+from mlxer import bot as bot_mod
+from mlxer.config import (
     Config,
     ConfigError,
     DEFAULT_CONFIG_PATH,
     load,
     update_value,
 )
-from mlx_manager.context import model_memory_plan, wired_limit_mb
-from mlx_manager.models import Model, discover, discover_with_skipped, resolve
-from mlx_manager.paths import ensure_parent, expand
-from mlx_manager.providers import (
+from mlxer.context import model_memory_plan, wired_limit_mb
+from mlxer.models import Model, discover, discover_with_skipped, resolve
+from mlxer.paths import ensure_parent, expand
+from mlxer.providers import (
     ApplyError,
     ProviderContext,
     apply_opencode,
@@ -36,7 +36,7 @@ from mlx_manager.providers import (
     reset_opencode,
     warp_snippet,
 )
-from mlx_manager import server as srv
+from mlxer import server as srv
 
 
 EXIT_OK = 0
@@ -147,10 +147,10 @@ def _lan_ip() -> str | None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="mlx-manager",
+        prog="mlxer",
         description="Headless controller for the MLX HTTP server.",
     )
-    p.add_argument("--version", action="version", version=f"mlx-manager {__version__}")
+    p.add_argument("--version", action="version", version=f"mlxer {__version__}")
     p.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="path to config TOML")
     p.add_argument("--verbose", action="store_true", help="enable verbose logging to stderr")
 
@@ -254,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     oc.add_argument(
         "--reset",
         action="store_true",
-        help="remove mlx-manager-managed provider blocks from the OpenCode config and exit",
+        help="remove mlxer-managed provider blocks from the OpenCode config and exit",
     )
     oc.add_argument(
         "--remote",
@@ -1056,7 +1056,7 @@ def _cmd_config_opencode(cfg: Config, args: argparse.Namespace) -> int:
         return EXIT_OK
     contexts = _provider_contexts(cfg, args.model, remote=remote, managed_names=True)
     if not any(c.model_id for c in contexts):
-        _eprint("error: no model available; pass --model or run `mlx-manager list`")
+        _eprint("error: no model available; pass --model or run `mlxer list`")
         return EXIT_CONFIG
     if remote:
         _vprint(f"remote mode: using LAN IP in config", args.verbose)
@@ -1096,7 +1096,7 @@ def _cmd_config_opencode(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_config_claude_code(cfg: Config, args: argparse.Namespace) -> int:
     model_id = _pick_provider_model(cfg, args.model)
     if not model_id:
-        _eprint("error: no model available; pass --model or run `mlx-manager list`")
+        _eprint("error: no model available; pass --model or run `mlxer list`")
         return EXIT_CONFIG
     remote = getattr(args, "remote", False)
     ctx = _provider_context(cfg, model_id, remote=remote)
@@ -1109,7 +1109,7 @@ def _cmd_config_claude_code(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_config_warp(cfg: Config, args: argparse.Namespace) -> int:
     model_id = _pick_provider_model(cfg, args.model)
     if not model_id:
-        _eprint("error: no model available; pass --model or run `mlx-manager list`")
+        _eprint("error: no model available; pass --model or run `mlxer list`")
         return EXIT_CONFIG
     remote = getattr(args, "remote", False)
     ctx = _provider_context(cfg, model_id, remote=remote)
@@ -1215,7 +1215,7 @@ def _cmd_config_edit(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _mlx_lm_importable_here() -> bool:
-    """True if ``mlx_lm`` can be imported by the interpreter running mlx-manager.
+    """True if ``mlx_lm`` can be imported by the interpreter running mlxer.
 
     This is what the in-process ``bot`` command needs, and is independent of
     ``server.python_executable`` (which only matters for the ``start`` subprocess).
@@ -1288,7 +1288,7 @@ def _doctor_fix(cfg: Config) -> None:
 
     # Make `start` work too: the server runs `<python_executable> -m mlx_lm
     # server` as a subprocess. If that interpreter can't import mlx_lm but this
-    # one can (e.g. mlx-manager is pipx-isolated and the server default is a
+    # one can (e.g. mlxer is pipx-isolated and the server default is a
     # Homebrew python without mlx_lm), repoint the default at this interpreter
     # rather than touching an externally-managed Python.
     if not srv.mlx_lm_installed(cfg.server.python_executable) and _mlx_lm_importable_here():
@@ -1351,15 +1351,15 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
         add("mlx_lm server --help", "WARN", "skipped (mlx_lm missing)")
 
     # The `bot` command imports mlx_lm into THIS interpreter, which can differ
-    # from server.python_executable (e.g. when mlx-manager is pipx-isolated).
+    # from server.python_executable (e.g. when mlxer is pipx-isolated).
     if _mlx_lm_importable_here():
         add("bot runtime", "OK", f"mlx_lm importable here ({sys.executable})")
     else:
         app = _pipx_app_name()
         hint = (
-            f"run `mlx-manager doctor --fix` (will run `pipx inject {app} mlx-lm`)"
+            f"run `mlxer doctor --fix` (will run `pipx inject {app} mlx-lm`)"
             if app
-            else "run `mlx-manager doctor --fix`"
+            else "run `mlxer doctor --fix`"
         )
         add(
             "bot runtime",

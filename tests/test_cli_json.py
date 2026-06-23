@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mlx_manager import cli
+from mlxer import cli
 
 
 def _run(monkeypatch, capsys, args, *, config_path: Path) -> tuple[int, str, str]:
@@ -101,7 +101,7 @@ def test_config_opencode_emits_json(tmp_path, monkeypatch, capsys, fake_models_r
     assert rc == 0
     doc = json.loads(out)
     assert "provider" in doc
-    assert "mlx-manager:mlx-local:8080" in doc["provider"]
+    assert "mlxer:mlx-local:8080" in doc["provider"]
 
 
 def test_config_warp_emits_byok_fields(tmp_path, monkeypatch, capsys, fake_models_root):
@@ -182,7 +182,7 @@ def test_config_opencode_running_single_server_name_includes_port(tmp_path, monk
     rc, out, _ = _run(monkeypatch, capsys, ["config", "opencode"], config_path=cfg)
     assert rc == 0
     doc = json.loads(out)
-    assert "mlx-manager:mlx-local:18081" in doc["provider"]
+    assert "mlxer:mlx-local:18081" in doc["provider"]
 
 
 def test_config_opencode_choose_prompts_and_applies(
@@ -212,7 +212,7 @@ def test_config_opencode_choose_prompts_and_applies(
     assert "Claude Code (LiteLLM) snippet" in out
     doc = json.loads(target.read_text())
     keys = list(doc["provider"].keys())
-    assert any(k.startswith("mlx-manager:") for k in keys)
+    assert any(k.startswith("mlxer:") for k in keys)
 
 
 def test_config_opencode_reset_clears_managed_providers(tmp_path, monkeypatch, capsys):
@@ -226,7 +226,7 @@ def test_config_opencode_reset_clears_managed_providers(tmp_path, monkeypatch, c
         json.dumps(
             {
                 "provider": {
-                    "mlx-manager:mlx-local:8080": {"npm": "remove"},
+                    "mlxer:mlx-local:8080": {"npm": "remove"},
                     "anthropic": {"npm": "keep"},
                 }
             }
@@ -240,7 +240,7 @@ def test_config_opencode_reset_clears_managed_providers(tmp_path, monkeypatch, c
     )
     assert rc == 0
     assert err == ""
-    assert "1 mlx-manager provider(s) removed" in out
+    assert "1 mlxer provider(s) removed" in out
     assert json.loads(target.read_text())["provider"] == {"anthropic": {"npm": "keep"}}
 
 

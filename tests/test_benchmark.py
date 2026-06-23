@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from mlx_manager.benchmark import run, stream_one
+from mlxer.benchmark import run, stream_one
 
 
 def _make_handler(

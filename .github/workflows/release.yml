@@ -42,7 +42,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           PACKAGE_VERSION="$(python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
-          MODULE_VERSION="$(python -c 'import pathlib; ns = {}; exec(pathlib.Path("mlx_manager/__init__.py").read_text(), ns); print(ns["__version__"])')"
+          MODULE_VERSION="$(python -c 'import pathlib; ns = {}; exec(pathlib.Path("mlxer/__init__.py").read_text(), ns); print(ns["__version__"])')"
           test "$PACKAGE_VERSION" = "$MODULE_VERSION"
           test "${GITHUB_REF_NAME}" = "v${PACKAGE_VERSION}"
       - name: Build package
@@ -85,13 +85,13 @@ jobs:
       - name: Build binary
         run: |
           python -m pip install -e '.[release]'
-          pyinstaller --onefile --name mlx-manager mlx_manager/__main__.py
+          pyinstaller --onefile --name mlxer mlxer/__main__.py
           mkdir -p release
-          tar -czf release/mlx-manager-darwin-arm64.tar.gz -C dist mlx-manager
-          (cd release && shasum -a 256 mlx-manager-darwin-arm64.tar.gz > checksums.txt)
+          tar -czf release/mlxer-darwin-arm64.tar.gz -C dist mlxer
+          (cd release && shasum -a 256 mlxer-darwin-arm64.tar.gz > checksums.txt)
           cp install.sh release/install.sh
       - name: Smoke test binary
-        run: ./dist/mlx-manager --version
+        run: ./dist/mlxer --version
       - uses: actions/upload-artifact@v4
         with:
           name: github-release-assets

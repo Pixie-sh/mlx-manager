@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `mlx-manager` are documented here.
+All notable changes to `mlxer` are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `bot` command: an interactive chat with a small on-device LLM (default
   `mlx-community/gemma-4-e2b-it-4bit`) that auto-injects live server status,
   `doctor` findings, and recent log errors so it can help troubleshoot. The
-  model is downloaded once into `~/.mlx-manager/bot` (configurable via
+  model is downloaded once into `~/.mlxer/bot` (configurable via
   `[bot].cache_dir`) and reused offline thereafter. Configurable via the new
   `[bot]` table (`model`, `cache_dir`, `max_tokens`, `temperature`);
   overridable with `--model`/`--max-tokens`/`--temperature` and `--no-context`.
@@ -47,12 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   curated menu of lightweight, capable models — Gemma 4 E2B/E4B, Qwen3 1.7B,
   Llama 3.2 3B, Ministral 3B — and remembers the choice; re-pick with
   `--choose`.
-- `~/.mlx-manager/models` is now the first default model-discovery directory.
+- `~/.mlxer/models` is now the first default model-discovery directory.
 - `doctor` now reports a `bot runtime` check: whether `mlx_lm` is importable in
-  the interpreter running mlx-manager itself (what the in-process `bot` needs),
+  the interpreter running mlxer itself (what the in-process `bot` needs),
   which can differ from `server.python_executable`.
 - `doctor --fix` attempts remediation: installs `mlx_lm` into the bot runtime
-  (`pipx inject <app> mlx-lm` when mlx-manager is pipx-isolated, else
+  (`pipx inject <app> mlx-lm` when mlxer is pipx-isolated, else
   `pip install`), creates missing configured model directories, and — when the
   default `server.python_executable` ("python3") can't import `mlx_lm` but the
   current interpreter can — repoints it at the working interpreter so `start`
@@ -66,10 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `mlx_lm` loads the model lazily on the first request.
 
 ### Changed
+- The Python distribution, console script, standalone binary, release asset,
+  config directory, and managed OpenCode provider prefix were renamed from
+  the previous public name to `mlxer` to avoid colliding with an existing CLI name.
 - `pyproject.toml` now declares classifiers, keywords, and project URLs.
 - OpenCode provider keys emitted by `config opencode` are now prefixed with
-  `mlx-manager:` and suffixed with the port (e.g. `mlx-manager:mlx-local:8080`)
-  so every mlx-manager-managed block is identifiable. `--apply` opportunistically
+  `mlxer:` and suffixed with the port (e.g. `mlxer:mlx-local:8080`)
+  so every mlxer-managed block is identifiable. `--apply` opportunistically
   migrates a legacy bare key (e.g. `mlx-local`) when its `options.baseURL`
   matches the new block's `baseURL`, so existing setups upgrade without
   duplicate provider entries; user-curated bare keys pointing at a different
@@ -84,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `benchmark` request table now shows the request index in the `#` column
   (previously it leaked `finish_reason` there).
 - Removed a handful of unused imports (`field`, `Iterable`, `Any`, `sys`).
-- `mlx-manager list` now reuses `_human_size` for directory sizes instead
+- `mlxer list` now reuses `_human_size` for directory sizes instead
   of duplicating the formatting logic.
 - `--host 0.0.0.0` now exits with usage error unless `--bind-all` is also
   provided, matching the documented network exposure safety rule. The same

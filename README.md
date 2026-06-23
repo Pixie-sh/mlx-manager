@@ -1,4 +1,4 @@
-# mlx-manager
+# mlxer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -56,20 +56,20 @@ No daemon. No database. No web UI. Just `argparse`, a single state file, an
 
 Requires macOS on Apple Silicon, Python >= 3.11, and
 [`mlx_lm`](https://pypi.org/project/mlx-lm/) installed in the same interpreter
-`mlx-manager` will use to launch the server (by default `python3`).
+`mlxer` will use to launch the server (by default `python3`).
 
 ### Recommended: pipx or pip
 
 Install the CLI from PyPI:
 
 ```bash
-pipx install mlx-manager
+pipx install mlxer
 ```
 
 Or install into the active Python environment:
 
 ```bash
-python3 -m pip install mlx-manager
+python3 -m pip install mlxer
 ```
 
 Then install `mlx_lm` into the interpreter named by
@@ -84,24 +84,24 @@ python3 -m pip install mlx-lm
 For macOS Apple Silicon, install the latest GitHub Release binary with:
 
 ```bash
-curl -fsSL https://github.com/Pixie-sh/mlx-manager/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/Pixie-sh/mlxer/releases/latest/download/install.sh | sh
 ```
 
-The installer downloads `mlx-manager-darwin-arm64.tar.gz`, verifies it against
+The installer downloads `mlxer-darwin-arm64.tar.gz`, verifies it against
 `checksums.txt`, and writes the binary to `~/.local/bin` by default. Override
 the target directory or version when needed:
 
 ```bash
-curl -fsSL https://github.com/Pixie-sh/mlx-manager/releases/latest/download/install.sh \
-  | MLX_MANAGER_BIN_DIR=/usr/local/bin sh
+curl -fsSL https://github.com/Pixie-sh/mlxer/releases/latest/download/install.sh \
+  | MLXER_BIN_DIR=/usr/local/bin sh
 
-curl -fsSL https://github.com/Pixie-sh/mlx-manager/releases/download/v0.1.0/install.sh \
-  | MLX_MANAGER_VERSION=v0.1.0 sh
+curl -fsSL https://github.com/Pixie-sh/mlxer/releases/download/v0.1.0/install.sh \
+  | MLXER_VERSION=v0.1.0 sh
 ```
 
 The standalone binary manages `mlx_lm` through your configured Python
 interpreter; it does not bundle model runtimes or `mlx_lm` itself. Run
-`mlx-manager doctor` after installation to verify the environment.
+`mlxer doctor` after installation to verify the environment.
 
 ### Install from this repository
 
@@ -111,7 +111,7 @@ Install the runtime dependencies first:
 python3 -m pip install mlx-lm
 ```
 
-Then install `mlx-manager` from this repository for local development:
+Then install `mlxer` from this repository for local development:
 
 ```bash
 uv pip install -e .
@@ -119,12 +119,12 @@ pip install -e .
 ```
 
 The package install also installs `tomli-w`, the only direct runtime dependency
-declared by `mlx-manager` itself.
+declared by `mlxer` itself.
 
 Then verify your environment:
 
 ```bash
-mlx-manager doctor
+mlxer doctor
 ```
 
 If `mlx_lm` is missing, `doctor` will tell you; install it into the interpreter
@@ -133,12 +133,12 @@ named by `[server].python_executable` in your config.
 ## Quick start
 
 ```bash
-mlx-manager doctor                # check Python, mlx_lm, paths, port
-mlx-manager list                  # see discovered models
-mlx-manager load                  # guided local model picker and start steps
-mlx-manager status                # see live PID, uptime, endpoint
-mlx-manager benchmark             # TTFT, decode tok/s, aggregate throughput
-mlx-manager stop
+mlxer doctor                # check Python, mlx_lm, paths, port
+mlxer list                  # see discovered models
+mlxer load                  # guided local model picker and start steps
+mlxer status                # see live PID, uptime, endpoint
+mlxer benchmark             # TTFT, decode tok/s, aggregate throughput
+mlxer stop
 ```
 
 ## Global options
@@ -147,14 +147,14 @@ These work with every subcommand:
 
 | Flag | Description |
 |------|-------------|
-| `--config PATH` | Use a different config file (default `~/.config/mlx-manager/config.toml`). |
+| `--config PATH` | Use a different config file (default `~/.config/mlxer/config.toml`). |
 | `--verbose` | Emit progress information to stderr. |
 | `--version` | Print version and exit. |
 | `-h, --help` | Show help (works on every subcommand too). |
 
 ## Configuration
 
-First run creates `~/.config/mlx-manager/config.toml` with the defaults below.
+First run creates `~/.config/mlxer/config.toml` with the defaults below.
 All paths expand `~` and `$VAR`.
 
 ```toml
@@ -163,8 +163,8 @@ host = "127.0.0.1"
 port = 8080
 log_file = "~/services/mlx/logs/mlx-lm.server.log"
 pid_file = "~/services/mlx/mlx-lm.server.pid"
-state_file = "~/.local/state/mlx-manager/state.json"
-lock_file = "~/.local/state/mlx-manager/lock"
+state_file = "~/.local/state/mlxer/state.json"
+lock_file = "~/.local/state/mlxer/lock"
 python_executable = "python3"
 extra_args = []                  # forwarded to mlx_lm server verbatim
 startup_timeout_seconds = 120
@@ -175,7 +175,7 @@ patch_tool_calls = true          # best-effort shim for truncated tool calls
 
 [models]
 directories = [
-  "~/.mlx-manager/models",
+  "~/.mlxer/models",
   "~/.models/mlx",
   "~/models/mlx",
   "~/.cache/huggingface/hub",
@@ -193,7 +193,7 @@ provider_name = "mlx-local"
 
 [bot]
 model = "mlx-community/gemma-4-e2b-it-4bit"
-cache_dir = "~/.mlx-manager/bot"
+cache_dir = "~/.mlxer/bot"
 max_tokens = 1024
 temperature = 0.7
 ```
@@ -203,7 +203,7 @@ Validation: unknown tables or keys → exit code 3; `port` must be in
 and `[bot]` values are type-checked.
 
 Aliases pointing at non-existent paths are tolerated at load time (so a model
-can be temporarily unavailable without breaking `mlx-manager`); `doctor`
+can be temporarily unavailable without breaking `mlxer`); `doctor`
 warns about them.
 
 ## Model discovery
@@ -223,9 +223,9 @@ identified). This handles three common on-disk layouts uniformly:
 | Nested by publisher (LM Studio) | `~/.lmstudio/models/<publisher>/<name>/` | `<name>` |
 | Hugging Face hub cache | `~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<rev>/` | `<org>/<name>` |
 
-The id printed by `mlx-manager list` is the **same string** the HTTP API
+The id printed by `mlxer list` is the **same string** the HTTP API
 exposes — i.e. the value clients put in the `model` JSON field. For
-filesystem models that's the model directory's basename; mlx-manager spawns
+filesystem models that's the model directory's basename; mlxer spawns
 `mlx_lm server` with `cwd=<parent>` and `--model <basename>` so the API id
 ends up as the basename, not the absolute path. For HF-cache models the id
 is the HF-style `<org>/<name>` and mlx_lm's HF resolver finds the snapshot
@@ -235,10 +235,10 @@ If two filesystem models in different directories share the same basename,
 the first one discovered wins; rename one of the directories or set an alias
 to disambiguate.
 
-`mlx-manager start --model X` resolves `X` in this order: alias → discovered
+`mlxer start --model X` resolves `X` in this order: alias → discovered
 display name → absolute filesystem path.
 
-`mlx-manager load` is the guided shortcut form for local models. It prints the
+`mlxer load` is the guided shortcut form for local models. It prints the
 current discovered model list, asks which model to start, then steps through
 host, port, and whether to replace an existing managed server on that port.
 
@@ -251,8 +251,8 @@ host, port, and whether to replace an existing managed server on that port.
 Show discovered models.
 
 ```bash
-mlx-manager list
-mlx-manager list --json
+mlxer list
+mlxer list --json
 ```
 
 | Flag | Description |
@@ -272,12 +272,12 @@ mlx-community/... hf_cache  1        7.2GB  ~/.cache/huggingface/hub/...
 Launch the MLX server.
 
 ```bash
-mlx-manager start --model qwen3-8b-4bit
-mlx-manager start --model qwen3-8b-4bit --port 1234
-mlx-manager start --model /abs/path/to/model --replace
-mlx-manager start --model qwen3-8b-4bit --extra-arg trust-remote-code=true
-mlx-manager start --model qwen3-8b-4bit --bind-all     # bind on 0.0.0.0
-mlx-manager start --choose                             # guided model picker
+mlxer start --model qwen3-8b-4bit
+mlxer start --model qwen3-8b-4bit --port 1234
+mlxer start --model /abs/path/to/model --replace
+mlxer start --model qwen3-8b-4bit --extra-arg trust-remote-code=true
+mlxer start --model qwen3-8b-4bit --bind-all     # bind on 0.0.0.0
+mlxer start --choose                             # guided model picker
 ```
 
 | Flag | Description |
@@ -300,9 +300,9 @@ server start path as `start`, but instead of making you type the full command,
 it shows the current model list and prompts for the missing choices.
 
 ```bash
-mlx-manager load
-mlx-manager load --port 1237 --bind-all
-mlx-manager load --bind-all --replace
+mlxer load
+mlxer load --port 1237 --bind-all
+mlxer load --bind-all --replace
 ```
 
 | Flag | Description |
@@ -314,8 +314,8 @@ mlx-manager load --bind-all --replace
 Stop the managed server.
 
 ```bash
-mlx-manager stop
-mlx-manager stop --timeout 30
+mlxer stop
+mlxer stop --timeout 30
 ```
 
 | Flag | Description |
@@ -332,8 +332,8 @@ Equivalent to `start --replace`. Accepts the same `--model / --host / --port
 / --bind-all / --extra-arg` flags as `start`.
 
 ```bash
-mlx-manager restart
-mlx-manager restart --port 1234
+mlxer restart
+mlxer restart --port 1234
 ```
 
 ### `switch`
@@ -342,8 +342,8 @@ Convenience for swapping the running server to a different model. Takes
 the model id as a positional argument.
 
 ```bash
-mlx-manager switch qwen3-8b-4bit
-mlx-manager switch /abs/path/to/other-model --extra-arg max-tokens=8192
+mlxer switch qwen3-8b-4bit
+mlxer switch /abs/path/to/other-model --extra-arg max-tokens=8192
 ```
 
 | Flag | Description |
@@ -356,8 +356,8 @@ mlx-manager switch /abs/path/to/other-model --extra-arg max-tokens=8192
 Report live server state.
 
 ```bash
-mlx-manager status
-mlx-manager status --json
+mlxer status
+mlxer status --json
 ```
 
 | Flag | Description |
@@ -376,9 +376,9 @@ PID, clears the stale state file, and reports `not running`.
 Tail (and optionally follow) the server log.
 
 ```bash
-mlx-manager logs                  # last 100 lines
-mlx-manager logs --tail 500
-mlx-manager logs -f               # follow (Ctrl-C to exit)
+mlxer logs                  # last 100 lines
+mlxer logs --tail 500
+mlxer logs -f               # follow (Ctrl-C to exit)
 ```
 
 | Flag | Description |
@@ -395,8 +395,8 @@ Show metadata for a single model: id, source, weight files, total size,
 selected `config.json` fields.
 
 ```bash
-mlx-manager info qwen3-8b-4bit
-mlx-manager info qwen3-8b-4bit --json
+mlxer info qwen3-8b-4bit
+mlxer info qwen3-8b-4bit --json
 ```
 
 | Flag | Description |
@@ -410,9 +410,9 @@ Run diagnostics. Useful as the first thing you run after install, and
 whenever something looks off.
 
 ```bash
-mlx-manager doctor
-mlx-manager doctor --json
-mlx-manager doctor --fix
+mlxer doctor
+mlxer doctor --json
+mlxer doctor --fix
 ```
 
 | Flag | Description |
@@ -432,7 +432,7 @@ Checks performed:
 - Platform is `Darwin/arm64`.
 - Total physical memory (via `sysctl hw.memsize`).
 - `pf` firewall state.
-- The current `mlx-manager` runtime can import `mlx_lm` for the in-process
+- The current `mlxer` runtime can import `mlx_lm` for the in-process
   [`bot`](#bot) command.
 
 Exits `1` if any check is `FAIL`, otherwise `0`.
@@ -446,15 +446,15 @@ printed to stderr so `--json` output stays parseable.
 ### `bot`
 
 Chat with a small on-device troubleshooting assistant. The bot runs `mlx_lm`
-in the current `mlx-manager` Python process, injects live `status`, `doctor`,
+in the current `mlxer` Python process, injects live `status`, `doctor`,
 and recent-log context by default, and downloads its model once into
 `[bot].cache_dir` for later reuse.
 
 ```bash
-mlx-manager bot
-mlx-manager bot --choose
-mlx-manager bot --model mlx-community/Qwen3-1.7B-4bit
-mlx-manager bot --no-context
+mlxer bot
+mlxer bot --choose
+mlxer bot --model mlx-community/Qwen3-1.7B-4bit
+mlxer bot --no-context
 ```
 
 | Flag | Description |
@@ -466,7 +466,7 @@ mlx-manager bot --no-context
 | `--no-context` | Do not inject live server, doctor, or log context. |
 
 If `mlx_lm` is not importable in the current interpreter, `bot` exits `7` and
-suggests `mlx-manager doctor --fix`.
+suggests `mlxer doctor --fix`.
 
 ### `benchmark`
 
@@ -476,13 +476,13 @@ chunk count for servers that don't emit `usage`), and **aggregate throughput**
 = total completion tokens across all parallel streams ÷ wall-clock.
 
 ```bash
-mlx-manager benchmark                                  # default prompt, 5 requests
-mlx-manager benchmark --requests 8 --concurrency 4     # concurrency sweep
-mlx-manager benchmark --prompt-file ./prompt.txt --max-tokens 512
-mlx-manager benchmark --warmup 2                       # extra non-counted warmups
-mlx-manager benchmark --json                           # machine-readable
-mlx-manager benchmark --endpoint http://host:1235/v1 --model some-id
-mlx-manager benchmark --save results.json
+mlxer benchmark                                  # default prompt, 5 requests
+mlxer benchmark --requests 8 --concurrency 4     # concurrency sweep
+mlxer benchmark --prompt-file ./prompt.txt --max-tokens 512
+mlxer benchmark --warmup 2                       # extra non-counted warmups
+mlxer benchmark --json                           # machine-readable
+mlxer benchmark --endpoint http://host:1235/v1 --model some-id
+mlxer benchmark --save results.json
 ```
 
 | Flag | Default | Description |
@@ -532,14 +532,14 @@ Emit a `provider` block ready to paste into
 `~/.config/opencode/opencode.json`, or apply it in place.
 
 ```bash
-mlx-manager config opencode                            # print snippet to stdout
-mlx-manager config opencode --model qwen3-8b-4bit
-mlx-manager config opencode --format full              # full opencode.json shape
-mlx-manager config opencode --apply                    # merge into ~/.config/opencode/opencode.json
-mlx-manager config opencode --apply --overwrite        # replace the provider block
-mlx-manager config opencode --reset                    # remove mlx-manager-managed provider blocks
-mlx-manager config opencode --apply --target /path/to/opencode.json
-mlx-manager config opencode --remote                   # use LAN IP, suffix provider name with @hostname
+mlxer config opencode                            # print snippet to stdout
+mlxer config opencode --model qwen3-8b-4bit
+mlxer config opencode --format full              # full opencode.json shape
+mlxer config opencode --apply                    # merge into ~/.config/opencode/opencode.json
+mlxer config opencode --apply --overwrite        # replace the provider block
+mlxer config opencode --reset                    # remove mlxer-managed provider blocks
+mlxer config opencode --apply --target /path/to/opencode.json
+mlxer config opencode --remote                   # use LAN IP, suffix provider name with @hostname
 ```
 
 | Flag | Description |
@@ -549,7 +549,7 @@ mlx-manager config opencode --remote                   # use LAN IP, suffix prov
 | `--apply` | Write into the file instead of stdout. A `<file>.bak` is created. |
 | `--target PATH` | OpenCode config path (default `~/.config/opencode/opencode.json`). Used with `--apply` or `--reset`. |
 | `--overwrite` | Replace the entire provider block. Without it, `--apply` *merges*: `npm`/`name`/`options` are refreshed and missing model entries added, but hand-tuned per-model fields (e.g. `"limit": { "context": ..., "output": ... }`) are preserved. Other top-level keys in `opencode.json` (`permission`, `mcp`, `plugin`, ...) are untouched. |
-| `--reset` | Remove only provider keys marked with the `mlx-manager:` prefix from the target OpenCode config. User-managed providers are preserved. |
+| `--reset` | Remove only provider keys marked with the `mlxer:` prefix from the target OpenCode config. User-managed providers are preserved. |
 | `--remote` | Use this machine's LAN IP instead of `127.0.0.1`/`0.0.0.0` in the emitted URL and suffix the provider name with `@<hostname>`. Useful when generating a config for clients on the same network. |
 
 Sample snippet (`merge` form):
@@ -557,7 +557,7 @@ Sample snippet (`merge` form):
 ```json
 {
   "provider": {
-    "mlx-manager:mlx-local:8080": {
+    "mlxer:mlx-local:8080": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "MLX Local",
       "options": {
@@ -574,16 +574,16 @@ Sample snippet (`merge` form):
 
 If a server is currently running, the snippet's `baseURL` is taken from the
 live state; otherwise it falls back to `[providers].base_url` and finally to
-`[server].host:port`. OpenCode provider keys are marked with `mlx-manager:`
-and always include the port, such as `mlx-manager:mlx-local:8080`, so reset can
-identify every mlx-manager-managed entry consistently.
+`[server].host:port`. OpenCode provider keys are marked with `mlxer:`
+and always include the port, such as `mlxer:mlx-local:8080`, so reset can
+identify every mlxer-managed entry consistently.
 
-**Migrating from an earlier version.** Pre-`mlx-manager:` releases wrote a
-bare `mlx-local` provider block. On `--apply`, mlx-manager now opportunistically
-removes any legacy bare key whose `options.baseURL` matches the new block's
-`baseURL` — so a previously-managed provider migrates cleanly to the new
-key without leaving a stale duplicate. A bare `mlx-local` block that points
-at a different backend (e.g. LiteLLM on a different port) is treated as
+**Migrating from an earlier version.** Older releases wrote either a bare
+`mlx-local` provider block or an older managed key. On `--apply`, mlxer
+opportunistically removes any legacy key whose `options.baseURL` matches the new
+block's `baseURL`, so a previously-managed provider migrates cleanly to the new
+`mlxer:` key without leaving a stale duplicate. A bare `mlx-local` block that
+points at a different backend (e.g. LiteLLM on a different port) is treated as
 user-curated and left in place. If you'd rather start fresh, run
 `config opencode --reset` before `--apply`.
 
@@ -592,9 +592,9 @@ user-curated and left in place. If you'd rather start fresh, run
 Emit guidance and a LiteLLM `model_list` YAML for Claude Code.
 
 ```bash
-mlx-manager config claude-code
-mlx-manager config claude-code --model qwen3-8b-4bit
-mlx-manager config claude-code --remote
+mlxer config claude-code
+mlxer config claude-code --model qwen3-8b-4bit
+mlxer config claude-code --remote
 ```
 
 | Flag | Description |
@@ -605,7 +605,7 @@ mlx-manager config claude-code --remote
 Why a snippet rather than direct config? At the time of writing, the Claude
 Code CLI (`claude --help`) documents only Anthropic auth and third-party
 providers Bedrock / Vertex / Foundry — there is no documented
-OpenAI-compatible base-URL routing. mlx-manager therefore does **not** emit
+OpenAI-compatible base-URL routing. mlxer therefore does **not** emit
 `ANTHROPIC_BASE_URL`. Instead the output gives two paths:
 
 1. **Recommended — LiteLLM in front of MLX.** Use the printed `model_list:`
@@ -625,9 +625,9 @@ Emit WARP Terminal BYOK/custom-provider setup values for the local MLX
 OpenAI-compatible endpoint.
 
 ```bash
-mlx-manager config warp
-mlx-manager config warp --model qwen3-8b-4bit
-mlx-manager config warp --remote
+mlxer config warp
+mlxer config warp --model qwen3-8b-4bit
+mlxer config warp --remote
 ```
 
 | Flag | Description |
@@ -647,7 +647,7 @@ API key: mlx-local
 Model: qwen3-8b-4bit
 ```
 
-Use these values in WARP's custom AI provider or BYOK settings. `mlx-manager`
+Use these values in WARP's custom AI provider or BYOK settings. `mlxer`
 does not currently modify WARP files directly because WARP's local AI provider
 configuration file schema is not verified here; this keeps user-managed WARP
 settings safe while still providing copy/paste-ready endpoint details.
@@ -657,8 +657,8 @@ settings safe while still providing copy/paste-ready endpoint details.
 Display the current effective configuration (merged defaults + your file).
 
 ```bash
-mlx-manager config show
-mlx-manager config show --json
+mlxer config show
+mlxer config show --json
 ```
 
 | Flag | Description |
@@ -670,8 +670,8 @@ mlx-manager config show --json
 Open `config.toml` in `$EDITOR` and reload it on save (validates after).
 
 ```bash
-mlx-manager config edit
-mlx-manager config edit --editor code
+mlxer config edit
+mlxer config edit --editor code
 ```
 
 | Flag | Description |
@@ -712,10 +712,10 @@ error.
 
 ## Troubleshooting
 
-- **`mlx_lm not installed`** — run `mlx-manager doctor`. Install with
+- **`mlx_lm not installed`** — run `mlxer doctor`. Install with
   `pip install mlx-lm` into the interpreter named by
   `[server].python_executable`.
-- **`port already in use`** — another process is bound. `mlx-manager`
+- **`port already in use`** — another process is bound. `mlxer`
   reports the conflicting PID when it can discover one via `lsof`.
 - **`server did not become ready within Ns`** — the launcher prints the
   last 40 log lines and exits 6. Check the log file for the real failure.
@@ -726,8 +726,8 @@ error.
 ## Development
 
 ```bash
-git clone https://github.com/Pixie-sh/mlx-manager.git
-cd mlx-manager
+git clone https://github.com/Pixie-sh/mlxer.git
+cd mlxer
 pip install -e '.[dev]'
 pytest -q
 ```

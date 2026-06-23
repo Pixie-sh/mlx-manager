@@ -1,23 +1,24 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO="Pixie-sh/mlx-manager"
-VERSION="${MLX_MANAGER_VERSION:-latest}"
-BIN_DIR="${MLX_MANAGER_BIN_DIR:-$HOME/.local/bin}"
-ARTIFACT="mlx-manager-darwin-arm64.tar.gz"
+REPO="Pixie-sh/mlxer"
+VERSION="${MLXER_VERSION:-latest}"
+BIN_DIR="${MLXER_BIN_DIR:-$HOME/.local/bin}"
+BIN_NAME="mlxer"
+ARTIFACT="mlxer-darwin-arm64.tar.gz"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 if [ "$OS" != "Darwin" ] || [ "$ARCH" != "arm64" ]; then
-  echo "mlx-manager standalone binaries currently support macOS Apple Silicon only." >&2
-  echo "Use pipx instead: pipx install mlx-manager" >&2
+  echo "$BIN_NAME standalone binaries currently support macOS Apple Silicon only." >&2
+  echo "Use pipx instead: pipx install $BIN_NAME" >&2
   exit 1
 fi
 
 for cmd in awk curl grep install shasum tar; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "$cmd is required to install mlx-manager." >&2
+    echo "$cmd is required to install $BIN_NAME." >&2
     exit 1
   fi
 done
@@ -39,7 +40,7 @@ CHECKSUMS="$TMP_DIR/checksums.txt"
 
 if ! curl -fsL "$BASE_URL/$ARTIFACT" -o "$ARCHIVE"; then
   echo "Failed to download $ARTIFACT from $BASE_URL." >&2
-  echo "The requested release asset may not exist yet. Use pipx instead: pipx install mlx-manager" >&2
+  echo "The requested release asset may not exist yet. Use pipx instead: pipx install $BIN_NAME" >&2
   exit 1
 fi
 
@@ -63,23 +64,23 @@ fi
 
 ARCHIVE_LIST="$TMP_DIR/archive-list.txt"
 tar -tzf "$ARCHIVE" > "$ARCHIVE_LIST"
-if [ "$(wc -l < "$ARCHIVE_LIST" | tr -d ' ')" != "1" ] || ! grep -qx "mlx-manager" "$ARCHIVE_LIST"; then
+if [ "$(wc -l < "$ARCHIVE_LIST" | tr -d ' ')" != "1" ] || ! grep -qx "$BIN_NAME" "$ARCHIVE_LIST"; then
   echo "Unexpected archive contents in $ARTIFACT." >&2
   exit 1
 fi
 
-tar -xzf "$ARCHIVE" -C "$TMP_DIR" mlx-manager
-if [ ! -f "$TMP_DIR/mlx-manager" ]; then
-  echo "Archive did not contain the mlx-manager binary." >&2
+tar -xzf "$ARCHIVE" -C "$TMP_DIR" "$BIN_NAME"
+if [ ! -f "$TMP_DIR/$BIN_NAME" ]; then
+  echo "Archive did not contain the $BIN_NAME binary." >&2
   exit 1
 fi
 mkdir -p "$BIN_DIR"
-install -m 0755 "$TMP_DIR/mlx-manager" "$BIN_DIR/mlx-manager"
+install -m 0755 "$TMP_DIR/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) echo "Note: $BIN_DIR is not on PATH. Add it before running mlx-manager." >&2 ;;
+  *) echo "Note: $BIN_DIR is not on PATH. Add it before running $BIN_NAME." >&2 ;;
 esac
 
-echo "Installed mlx-manager to $BIN_DIR/mlx-manager"
-echo "Next: mlx-manager doctor"
+echo "Installed $BIN_NAME to $BIN_DIR/$BIN_NAME"
+echo "Next: $BIN_NAME doctor"

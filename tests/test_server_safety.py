@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from mlx_manager import server as srv
-from mlx_manager.config import ModelsCfg
-from mlx_manager.models import Model, discover
-from mlx_manager.paths import expand
+from mlxer import server as srv
+from mlxer.config import ModelsCfg
+from mlxer.models import Model, discover
+from mlxer.paths import expand
 
 
 def _spawn_idle(tag: str = "mlx-test-idle") -> subprocess.Popen:
@@ -246,7 +246,7 @@ def test_serving_invocation_filesystem_uses_basename_and_parent_cwd(
     fake_lmstudio_root,
 ):
     """Filesystem models spawn with ``cwd=<parent>`` and ``--model <basename>``
-    so the API exposes the same id ``mlx-manager list`` shows."""
+    so the API exposes the same id ``mlxer list`` shows."""
     cfg = ModelsCfg(
         directories=[str(fake_lmstudio_root)], default_model="", aliases={}
     )

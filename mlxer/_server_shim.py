@@ -1,6 +1,6 @@
-"""Launch shim: run mlx_lm's server with mlx-manager's tool-call patch applied.
+"""Launch shim: run mlx_lm's server with mlxer's tool-call patch applied.
 
-mlx-manager invokes this exactly as it would invoke ``python -m mlx_lm server``,
+mlxer invokes this exactly as it would invoke ``python -m mlx_lm server``,
 i.e. ``python <this file> server --model ... --host ... --port ...``. The shim
 patches ``mlx_lm.server`` in memory, then hands off to ``mlx_lm.cli.main()`` so
 the server behaves identically apart from the patch.
@@ -26,7 +26,7 @@ Two patches are applied:
    render the merged block identically, so the patch is safe for every model.
 
 This runs as a *script* under the server's interpreter, which need not have
-mlx-manager importable — only stdlib and mlx_lm. The patch is best-effort: if
+mlxer importable — only stdlib and mlx_lm. The patch is best-effort: if
 mlx_lm's internals don't match (e.g. a future version renames things), it logs a
 warning and the server starts unpatched rather than failing to boot.
 """
@@ -160,13 +160,13 @@ def main(argv: list[str] | None = None) -> None:
     try:
         _apply_patch()
         _announce_when_logging_ready(
-            "mlx-manager: patches active "
+            "mlxer: patches active "
             "(unparseable tool calls report finish_reason=length; "
             "consecutive system messages merged for strict chat templates)"
         )
     except Exception as e:  # never block startup on a patch failure
         logging.getLogger(__name__).warning(
-            "mlx-manager: tool-call patch not applied (%s: %s); "
+            "mlxer: tool-call patch not applied (%s: %s); "
             "server will run unpatched",
             type(e).__name__,
             e,

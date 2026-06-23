@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from mlx_manager import _server_shim as shim
+from mlxer import _server_shim as shim
 
 mlx_server = pytest.importorskip("mlx_lm.server")
 

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mlx_manager.context import (
+from mlxer.context import (
     DEFAULT_PROMPT_CACHE_FRACTION,
     model_memory_plan,
     model_weight_bytes,
@@ -101,7 +101,7 @@ def test_model_memory_plan_returns_plan(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps(_QWEN3_4B))
     (tmp_path / "model.safetensors").write_bytes(b"x" * (2 * 1024**3 // 100))
 
-    with patch("mlx_manager.context.system_ram_bytes", return_value=16 * 1024**3):
+    with patch("mlxer.context.system_ram_bytes", return_value=16 * 1024**3):
         plan = model_memory_plan(tmp_path)
 
     assert plan is not None
@@ -121,7 +121,7 @@ def test_model_memory_plan_none_on_missing_config(tmp_path):
 
 def test_model_memory_plan_none_when_ram_unavailable(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps(_QWEN3_4B))
-    with patch("mlx_manager.context.system_ram_bytes", return_value=0):
+    with patch("mlxer.context.system_ram_bytes", return_value=0):
         assert model_memory_plan(tmp_path) is None
 
 
@@ -141,7 +141,7 @@ def test_safe_context_ignores_max_when_zero():
 def test_model_memory_plan_honors_max_context_tokens(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps(_QWEN3_4B))
     (tmp_path / "model.safetensors").write_bytes(b"")
-    with patch("mlx_manager.context.system_ram_bytes", return_value=256 * 1024**3):
+    with patch("mlxer.context.system_ram_bytes", return_value=256 * 1024**3):
         plan = model_memory_plan(tmp_path, max_context_tokens=4096)
     assert plan is not None
     tokens, _ = plan
@@ -151,7 +151,7 @@ def test_model_memory_plan_honors_max_context_tokens(tmp_path):
 def test_model_memory_plan_fraction_scales_cache(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps(_QWEN3_4B))
     (tmp_path / "model.safetensors").write_bytes(b"")
-    with patch("mlx_manager.context.system_ram_bytes", return_value=64 * 1024**3):
+    with patch("mlxer.context.system_ram_bytes", return_value=64 * 1024**3):
         half = model_memory_plan(tmp_path, prompt_cache_fraction=0.5)
         full = model_memory_plan(tmp_path, prompt_cache_fraction=1.0)
     assert half is not None and full is not None
@@ -162,7 +162,7 @@ def test_model_memory_plan_fraction_scales_cache(tmp_path):
 def test_model_memory_plan_invalid_fraction_falls_back(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps(_QWEN3_4B))
     (tmp_path / "model.safetensors").write_bytes(b"")
-    with patch("mlx_manager.context.system_ram_bytes", return_value=64 * 1024**3):
+    with patch("mlxer.context.system_ram_bytes", return_value=64 * 1024**3):
         bad = model_memory_plan(tmp_path, prompt_cache_fraction=1.5)
         default = model_memory_plan(tmp_path)
     assert bad is not None and default is not None

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Literal, Union
 
-from mlx_manager.config import ModelsCfg
-from mlx_manager.paths import expand
+from mlxer.config import ModelsCfg
+from mlxer.paths import expand
 
 Source = Literal["alias", "directory", "hf_cache"]
 
@@ -234,5 +234,5 @@ def resolve(cfg: ModelsCfg, requested: str) -> Model:
         return Model(id=p.name, path=p.resolve(), source="directory")
 
     raise LookupError(
-        f"model {requested!r} not found; try `mlx-manager list` to see available IDs"
+        f"model {requested!r} not found; try `mlxer list` to see available IDs"
     )

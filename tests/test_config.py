@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mlx_manager.config import ConfigError, load, write_default
+from mlxer.config import ConfigError, load, write_default
 
 
 def test_first_run_writes_defaults(tmp_path):
