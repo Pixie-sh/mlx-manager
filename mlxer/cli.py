@@ -149,7 +149,7 @@ def _lan_ip() -> str | None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mlxer",
-        description="Headless controller for the MLX HTTP server.",
+        description="MLX LLM Server Controller: A headless CLI for running local AI models on Apple Silicon.",
     )
     p.add_argument("--version", action="version", version=f"mlxer {__version__}")
     p.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="path to config TOML")
