@@ -47,6 +47,7 @@ EXIT_NOT_RUNNING = 4
 EXIT_ALREADY_RUNNING = 5
 EXIT_STARTUP_TIMEOUT = 6
 EXIT_MLX_LM_MISSING = 7
+EXIT_INTERRUPTED = 130
 
 # Canonical TCP port range — mirrors config.py:_validate (server.port).
 _PORT_MIN = 1024
@@ -1238,12 +1239,37 @@ def _pipx_app_name() -> str | None:
     return None
 
 
+def _is_standalone_binary() -> bool:
+    """True when running from the bundled PyInstaller binary."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _managed_venv_python() -> Path:
+    """Return the Python path for mlxer's private runtime venv."""
+    root = expand(os.environ.get("MLXER_RUNTIME_VENV", "~/.local/share/mlxer/venv"))
+    return root / "bin" / "python"
+
+
 def _mlx_lm_install_cmd() -> list[str]:
     """Build the command that installs mlx_lm into the bot's runtime."""
     app = _pipx_app_name()
     if app and shutil.which("pipx"):
         return ["pipx", "inject", app, "mlx-lm"]
     return [sys.executable, "-m", "pip", "install", "mlx-lm"]
+
+
+def _install_mlx_lm_in_managed_venv(base_python: str) -> Path | None:
+    """Create/update the private server venv and return its Python if usable."""
+    venv_python = _managed_venv_python()
+    venv_dir = venv_python.parent.parent
+    if not venv_python.exists():
+        _eprint(f"- creating private runtime venv at {venv_dir}")
+        if _run_fix_cmd([base_python, "-m", "venv", str(venv_dir)]) != 0:
+            return None
+    _eprint("- installing mlx_lm into private runtime venv")
+    if _run_fix_cmd([str(venv_python), "-m", "pip", "install", "mlx-lm"]) != 0:
+        return None
+    return venv_python if srv.mlx_lm_installed(str(venv_python)) else None
 
 
 def _run_fix_cmd(cmd: list[str]) -> int:
@@ -1266,7 +1292,7 @@ def _doctor_fix(cfg: Config) -> None:
     _eprint("doctor --fix: attempting remediations")
     fixed_any = False
 
-    if not _mlx_lm_importable_here():
+    if not _mlx_lm_importable_here() and not _is_standalone_binary():
         fixed_any = True
         cmd = _mlx_lm_install_cmd()
         _eprint(f"- installing mlx_lm for the bot runtime ({sys.executable})")
@@ -1275,6 +1301,11 @@ def _doctor_fix(cfg: Config) -> None:
             _eprint("  → ok")
         else:
             _eprint("  → still missing; install mlx_lm manually into this environment")
+    elif not _mlx_lm_importable_here():
+        _eprint(
+            "- bot runtime: standalone binary cannot import external Python packages; "
+            "install mlxer with pipx or pip to use `bot`"
+        )
 
     for raw_dir in cfg.models.directories:
         d = expand(raw_dir)
@@ -1291,8 +1322,8 @@ def _doctor_fix(cfg: Config) -> None:
     # one can (e.g. mlxer is pipx-isolated and the server default is a
     # Homebrew python without mlx_lm), repoint the default at this interpreter
     # rather than touching an externally-managed Python.
-    if not srv.mlx_lm_installed(cfg.server.python_executable) and _mlx_lm_importable_here():
-        if cfg.server.python_executable == "python3":
+    if not srv.mlx_lm_installed(cfg.server.python_executable):
+        if cfg.server.python_executable == "python3" and _mlx_lm_importable_here():
             try:
                 update_value(cfg.path, "server", "python_executable", sys.executable)
                 fixed_any = True
@@ -1302,6 +1333,15 @@ def _doctor_fix(cfg: Config) -> None:
                 )
             except (OSError, ConfigError) as e:
                 _eprint(f"- could not update config: {e}")
+        elif cfg.server.python_executable == "python3" and _is_standalone_binary():
+            venv_python = _install_mlx_lm_in_managed_venv(cfg.server.python_executable)
+            if venv_python is not None:
+                try:
+                    update_value(cfg.path, "server", "python_executable", str(venv_python))
+                    fixed_any = True
+                    _eprint(f"- set server.python_executable = {venv_python}")
+                except (OSError, ConfigError) as e:
+                    _eprint(f"- could not update config: {e}")
         else:
             _eprint(
                 f"- note: server.python_executable ({cfg.server.python_executable}) "
@@ -1346,7 +1386,8 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
         add(
             "mlx_lm import",
             "FAIL",
-            "`import mlx_lm` failed; install with `pip install mlx-lm`",
+            "`import mlx_lm` failed; run `mlxer doctor --fix` or install mlx-lm "
+            "into [server].python_executable",
         )
         add("mlx_lm server --help", "WARN", "skipped (mlx_lm missing)")
 
@@ -1356,16 +1397,24 @@ def _doctor_checks(cfg: Config) -> list[dict[str, Any]]:
         add("bot runtime", "OK", f"mlx_lm importable here ({sys.executable})")
     else:
         app = _pipx_app_name()
-        hint = (
-            f"run `mlxer doctor --fix` (will run `pipx inject {app} mlx-lm`)"
-            if app
-            else "run `mlxer doctor --fix`"
-        )
-        add(
-            "bot runtime",
-            "FAIL",
-            f"mlx_lm not importable in {sys.executable} (needed by `bot`); {hint}",
-        )
+        if _is_standalone_binary():
+            add(
+                "bot runtime",
+                "WARN",
+                "standalone binary cannot import external Python packages; "
+                "install mlxer with pipx or pip to use `bot`",
+            )
+        else:
+            hint = (
+                f"run `mlxer doctor --fix` (will run `pipx inject {app} mlx-lm`)"
+                if app
+                else "run `mlxer doctor --fix`"
+            )
+            add(
+                "bot runtime",
+                "FAIL",
+                f"mlx_lm not importable in {sys.executable} (needed by `bot`); {hint}",
+            )
 
     for raw_dir in cfg.models.directories:
         d = expand(raw_dir)
@@ -1554,6 +1603,7 @@ def _cmd_info(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
     if getattr(args, "fix", False):
         _doctor_fix(cfg)
+        cfg = load(cfg.path)
     results = _doctor_checks(cfg)
     has_fail = any(r["status"] == "FAIL" for r in results)
     if args.as_json:
@@ -1798,7 +1848,11 @@ def main(argv: list[str] | None = None) -> int:
     if handler is None:
         parser.error(f"unknown command: {args.cmd!r}")
         return EXIT_USAGE
-    return handler(cfg, args)
+    try:
+        return handler(cfg, args)
+    except KeyboardInterrupt:
+        _eprint("\ninterrupted")
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":

@@ -121,7 +121,7 @@ jobs:
           init.write_text(f'__version__ = "{version}"\n')
           PY
           python -m pip install -e '.[release]'
-          pyinstaller --onefile --name mlxer mlxer/__main__.py
+          pyinstaller --onefile --name mlxer --add-data "mlxer/_server_shim.py:mlxer" mlxer/__main__.py
           mkdir -p release
           tar -czf release/mlxer-darwin-arm64.tar.gz -C dist mlxer
           (cd release && shasum -a 256 mlxer-darwin-arm64.tar.gz > checksums.txt)

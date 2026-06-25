@@ -32,6 +32,63 @@ def test_install_cmd_pip_when_pipx_missing(monkeypatch):
     assert cli._mlx_lm_install_cmd() == [sys.executable, "-m", "pip", "install", "mlx-lm"]
 
 
+def test_standalone_doctor_fix_uses_managed_venv_for_default_python(
+    monkeypatch, tmp_path, capsys
+):
+    from mlxer.config import load
+
+    cfg_path = tmp_path / "cfg.toml"
+    cfg_path.write_text(
+        '[server]\npython_executable = "python3"\n'
+        'log_file = "{0}/mlx.log"\npid_file = "{0}/mlx.pid"\n'
+        'state_file = "{0}/state.json"\nlock_file = "{0}/mlx.lock"\n'
+        "[models]\ndirectories = []\n".format(tmp_path)
+    )
+    cfg = load(cfg_path)
+    venv_python = tmp_path / "venv" / "bin" / "python"
+    monkeypatch.setattr(cli, "_mlx_lm_importable_here", lambda: False)
+    monkeypatch.setattr(cli, "_is_standalone_binary", lambda: True)
+    monkeypatch.setattr(cli.srv, "mlx_lm_installed", lambda py: py == str(venv_python))
+    monkeypatch.setattr(cli, "_install_mlx_lm_in_managed_venv", lambda _py: venv_python)
+
+    cli._doctor_fix(cfg)
+
+    assert load(cfg_path).server.python_executable == str(venv_python)
+    err = capsys.readouterr().err
+    assert "standalone binary cannot import external Python packages" in err
+    assert "set server.python_executable" in err
+
+
+def test_managed_venv_install_command_sequence(monkeypatch, tmp_path):
+    venv_python = tmp_path / "venv" / "bin" / "python"
+    ran = []
+    monkeypatch.setattr(cli, "_managed_venv_python", lambda: venv_python)
+    monkeypatch.setattr(cli, "_run_fix_cmd", lambda cmd: ran.append(cmd) or 0)
+    monkeypatch.setattr(cli.srv, "mlx_lm_installed", lambda py: py == str(venv_python))
+
+    assert cli._install_mlx_lm_in_managed_venv("python3") == venv_python
+    assert ran == [
+        ["python3", "-m", "venv", str(tmp_path / "venv")],
+        [str(venv_python), "-m", "pip", "install", "mlx-lm"],
+    ]
+
+
+def test_doctor_checks_warns_for_standalone_bot_runtime(monkeypatch, tmp_path, cfg_factory):
+    cfg = cfg_factory(directories=[str(tmp_path)])
+    monkeypatch.setattr(cli, "_mlx_lm_importable_here", lambda: False)
+    monkeypatch.setattr(cli, "_is_standalone_binary", lambda: True)
+    monkeypatch.setattr(cli.srv, "mlx_lm_installed", lambda _py: True)
+    monkeypatch.setattr(cli.srv, "mlx_lm_version", lambda _py: "1.0")
+    monkeypatch.setattr(cli.srv, "supported_server_flags", lambda _py: {"--model"})
+
+    results = cli._doctor_checks(cfg)
+
+    entry = next(r for r in results if r["name"] == "bot runtime")
+    assert entry["status"] == "WARN"
+    assert "standalone binary" in entry["detail"]
+    assert any(r["name"].startswith("models dir") for r in results)
+
+
 def test_doctor_fix_creates_missing_model_dirs(monkeypatch, tmp_path, capsys, cfg_factory):
     missing = tmp_path / "new-models"
     cfg = cfg_factory(directories=[str(missing)])

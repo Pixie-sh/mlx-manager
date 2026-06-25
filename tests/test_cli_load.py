@@ -59,6 +59,23 @@ def _inputs(values):
     return fake_input
 
 
+def test_load_ctrl_c_exits_without_traceback(tmp_path, monkeypatch, capsys, fake_models_root):
+    cfg = tmp_path / "cfg.toml"
+    _write_cfg(cfg, tmp_path, fake_models_root)
+
+    def interrupt(_prompt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupt)
+
+    rc = cli.main(["--config", str(cfg), "load"])
+    _out, err = capsys.readouterr()
+
+    assert rc == cli.EXIT_INTERRUPTED
+    assert "interrupted" in err
+    assert "Traceback" not in err
+
+
 def test_load_guides_model_host_port_and_replace(
     tmp_path, monkeypatch, capsys, fake_models_root
 ):

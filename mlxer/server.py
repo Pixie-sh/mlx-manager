@@ -492,6 +492,24 @@ _BOOL_FLAGS = {"--trust-remote-code", "--use-default-chat-template", "--pipeline
 _SERVER_SHIM = Path(__file__).with_name("_server_shim.py")
 
 
+def _staged_server_shim(cfg: Config) -> Path:
+    """Copy the launch shim to a durable path for spawned server processes."""
+    if not _SERVER_SHIM.exists():
+        raise ServerError(
+            f"server shim not found at {_SERVER_SHIM}; rebuild the standalone binary "
+            "with mlxer/_server_shim.py included",
+            exit_code=1,
+        )
+    target = expand(cfg.server.state_file).parent / "_server_shim.py"
+    ensure_parent(target)
+    source = _SERVER_SHIM.read_bytes()
+    if not target.exists() or target.read_bytes() != source:
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_bytes(source)
+        os.replace(tmp, target)
+    return target
+
+
 def _normalize_extra_args(
     pairs: Iterable[str],
     extra_list: Iterable[str],
@@ -553,11 +571,12 @@ def build_command(
     port: int,
     extra_arg_pairs: list[str],
     supported_flags: set[str],
+    shim_path: Path | None = None,
 ) -> tuple[list[str], Path | None, list[str]]:
     """Return ``(argv, cwd, warnings)`` for the mlx_lm server invocation."""
     serving_id, cwd = serving_invocation(model)
     if cfg.server.patch_tool_calls:
-        launcher = [cfg.server.python_executable, str(_SERVER_SHIM), "server"]
+        launcher = [cfg.server.python_executable, str(shim_path or _SERVER_SHIM), "server"]
     else:
         launcher = [cfg.server.python_executable, "-m", "mlx_lm", "server"]
     cmd = [
@@ -645,8 +664,15 @@ def start(
     cache_dir = ensure_hf_hub_cache_dir()
 
     supported = supported_server_flags(cfg.server.python_executable)
+    shim_path = _staged_server_shim(cfg) if cfg.server.patch_tool_calls else None
     cmd, cwd, warnings = build_command(
-        cfg, model, host, port, extra_arg_pairs, supported
+        cfg,
+        model,
+        host,
+        port,
+        extra_arg_pairs,
+        supported,
+        shim_path=shim_path,
     )
     if on_warning:
         for w in warnings:
@@ -689,6 +715,7 @@ def start(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             cwd=str(cwd) if cwd is not None else None,
+            env={**os.environ, "HF_HUB_CACHE": str(cache_dir)},
             start_new_session=True,
             close_fds=True,
         )

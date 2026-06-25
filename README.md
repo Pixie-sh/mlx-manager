@@ -72,11 +72,11 @@ Or install into the active Python environment:
 python3 -m pip install mlxer
 ```
 
-Then install `mlx_lm` into the interpreter named by
-`[server].python_executable` in your config:
+Then verify the runtime. If `mlx_lm` is missing, let `doctor --fix` install it
+into a managed runtime or into the appropriate pipx environment:
 
 ```bash
-python3 -m pip install mlx-lm
+mlxer doctor --fix
 ```
 
 ### Standalone binary: curl installer
@@ -101,11 +101,12 @@ curl -fsSL https://github.com/Pixie-sh/mlxer/releases/download/v0.1.0/install.sh
 
 The standalone binary manages `mlx_lm` through your configured Python
 interpreter; it does not bundle model runtimes or `mlx_lm` itself. Run
-`mlxer doctor` after installation to verify the environment.
+`mlxer doctor --fix` after installation to create a private runtime venv when
+your system Python is externally managed.
 
 ### Install from this repository
 
-Install the runtime dependencies first:
+Install the runtime dependencies first. In a virtual environment, use:
 
 ```bash
 python3 -m pip install mlx-lm
@@ -439,9 +440,11 @@ Exits `1` if any check is `FAIL`, otherwise `0`.
 
 With `--fix`, `doctor` attempts only local, reversible setup work: install
 `mlx_lm` into the bot runtime, create missing configured model directories,
-and repoint the default `server.python_executable` to the current interpreter
-when that interpreter can import `mlx_lm` but `python3` cannot. Fix progress is
-printed to stderr so `--json` output stays parseable.
+and repair the default `server.python_executable`. For Python/pipx installs it
+can repoint the server to the current working interpreter; for the standalone
+binary it creates a private venv under `~/.local/share/mlxer/venv` and points
+the server there. Fix progress is printed to stderr so `--json` output stays
+parseable.
 
 ### `bot`
 
@@ -712,9 +715,9 @@ error.
 
 ## Troubleshooting
 
-- **`mlx_lm not installed`** — run `mlxer doctor`. Install with
-  `pip install mlx-lm` into the interpreter named by
-  `[server].python_executable`.
+- **`mlx_lm not installed`** — run `mlxer doctor --fix`. Avoid plain global
+  `pip install` on Homebrew Python because PEP 668 may block it; `doctor --fix`
+  uses pipx injection or a private venv instead.
 - **`port already in use`** — another process is bound. `mlxer`
   reports the conflicting PID when it can discover one via `lsof`.
 - **`server did not become ready within Ns`** — the launcher prints the
@@ -734,6 +737,13 @@ pytest -q
 
 Tests run without `mlx_lm` installed and without starting a real server
 (every external call is faked through `tests/conftest.py`).
+
+To build the local standalone binary for manual testing:
+
+```bash
+pip install -e '.[release]'
+pyinstaller --onefile --name mlxer --add-data "mlxer/_server_shim.py:mlxer" mlxer/__main__.py
+```
 
 The codebase is intentionally small and stdlib-only on the runtime path; if
 you find a place where a tiny helper is more readable than another

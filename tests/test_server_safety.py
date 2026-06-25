@@ -304,6 +304,28 @@ def test_build_command_routes_through_shim_when_patch_enabled(
     assert cmd[cmd.index(str(srv._SERVER_SHIM)) + 1] == "server"
 
 
+def test_build_command_uses_staged_shim_when_supplied(cfg_factory, fake_lmstudio_root, tmp_path):
+    cfg = cfg_factory(patch_tool_calls=True)
+    shim = tmp_path / "_server_shim.py"
+    mcfg = ModelsCfg(
+        directories=[str(fake_lmstudio_root)], default_model="", aliases={}
+    )
+    m = next(x for x in discover(mcfg) if x.id == "gemma-test-MLX-4bit")
+
+    cmd, _cwd, _warnings = srv.build_command(
+        cfg,
+        m,
+        host="127.0.0.1",
+        port=12345,
+        extra_arg_pairs=[],
+        supported_flags=set(),
+        shim_path=shim,
+    )
+
+    assert str(shim) in cmd
+    assert str(srv._SERVER_SHIM) not in cmd
+
+
 def test_build_command_uses_mlx_lm_when_patch_disabled(
     cfg_factory, fake_lmstudio_root
 ):
@@ -345,6 +367,26 @@ def test_ensure_hf_hub_cache_dir_reports_create_failure(tmp_path, monkeypatch):
         srv.ensure_hf_hub_cache_dir()
 
 
+def test_staged_server_shim_copies_to_state_dir(tmp_path, cfg_factory, monkeypatch):
+    source = tmp_path / "source_shim.py"
+    source.write_text("print('shim')\n", encoding="utf-8")
+    cfg = cfg_factory(state_file=str(tmp_path / "state" / "state.json"))
+    monkeypatch.setattr(srv, "_SERVER_SHIM", source)
+
+    staged = srv._staged_server_shim(cfg)
+
+    assert staged == tmp_path / "state" / "_server_shim.py"
+    assert staged.read_text(encoding="utf-8") == "print('shim')\n"
+
+
+def test_staged_server_shim_requires_bundled_source(tmp_path, cfg_factory, monkeypatch):
+    cfg = cfg_factory(state_file=str(tmp_path / "state" / "state.json"))
+    monkeypatch.setattr(srv, "_SERVER_SHIM", tmp_path / "missing.py")
+
+    with pytest.raises(srv.ServerError, match="server shim not found"):
+        srv._staged_server_shim(cfg)
+
+
 def test_start_creates_hf_cache_before_spawning(tmp_path, cfg_factory, monkeypatch):
     cache = tmp_path / "missing-hf" / "hub"
     cfg = cfg_factory()
@@ -380,6 +422,9 @@ def test_start_creates_hf_cache_before_spawning(tmp_path, cfg_factory, monkeypat
 
     assert state.pid == 4242
     assert spawned
+    assert spawned["kwargs"]["env"]["HF_HUB_CACHE"] == str(cache)
+    assert str(srv._SERVER_SHIM) not in state.command
+    assert str(Path(cfg.server.state_file).parent / "_server_shim.py") in state.command
 
 
 def test_is_managed_process_recognizes_shim_argv(tmp_path):
