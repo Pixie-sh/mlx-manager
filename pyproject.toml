@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "rs" }]
-keywords = ["mlx", "mlx-lm", "apple-silicon", "llm", "local-llm", "cli", "opencode"]
+keywords = ["mlx", "mlx-lm", "apple-silicon", "llm", "local-llm", "cli", "opencode", "openai-compatible", "mlx-server", "headless", "on-device-llm", "local-inference", "mlxlm", "apple-silicon-llm"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -22,6 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Systems Administration",
 ]
@@ -35,6 +36,8 @@ Homepage = "https://github.com/Pixie-sh/mlxer"
 Repository = "https://github.com/Pixie-sh/mlxer"
 Issues = "https://github.com/Pixie-sh/mlxer/issues"
 Changelog = "https://github.com/Pixie-sh/mlxer/blob/main/CHANGELOG.md"
+PyPI = "https://pypi.org/project/mlxer/"
+Documentation = "https://github.com/Pixie-sh/mlxer#readme"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "huggingface-hub>=0.20"]

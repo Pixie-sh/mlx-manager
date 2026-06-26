@@ -1,6 +1,10 @@
-# mlxer
+# mlxer — Headless MLX Local LLM Server Manager
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![PyPI version](https://badge.fury.io/py/mlxer.svg)](https://pypi.org/project/mlxer/)
+[![Python version](https://img.shields.io/pypi/pyversions/mlxer.svg)](https://pypi.org/project/mlxer/)
+[![Downloads](https://img.shields.io/pypi/dm/mlxer.svg)](https://pypi.org/project/mlxer/)
+[![Test](https://github.com/Pixie-sh/mlxer/actions/workflows/test.yml/badge.svg)](https://github.com/Pixie-sh/mlxer/actions)
 
 A small, stdlib-first Python 3.11+ CLI that wraps `python -m mlx_lm server` so
 you can run a local [MLX](https://github.com/ml-explore/mlx) language-model
@@ -17,6 +21,7 @@ No daemon. No database. No web UI. Just `argparse`, a single state file, an
   run; reading TOML uses stdlib `tomllib`).
 - Tested on macOS / Apple Silicon (`Darwin/arm64`) with Python 3.11+.
 - License: [MIT](./LICENSE).
+- Available on [PyPI](https://pypi.org/project/mlxer/).
 
 ---
 
@@ -46,6 +51,8 @@ No daemon. No database. No web UI. Just `argparse`, a single state file, an
   - [`config edit`](#config-edit)
 - [Exit codes](#exit-codes)
 - [Safety notes](#safety-notes)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -766,3 +773,76 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 `mlx_lm` is a separate project; see
 [ml-explore/mlx-lm](https://github.com/ml-explore/mlx-lm) for its license.
+
+## FAQ
+
+**What is mlxer?**
+mlxer is a lightweight Python CLI that manages a local MLX language-model HTTP
+server on Apple Silicon Macs. It lets you start, stop, restart, and switch
+models without a GUI — ideal for SSH-only headless machines.
+
+**How does mlxer differ from other LLM tools?**
+mlxer is stdlib-first with only one runtime dependency (`tomli-w`). It has no
+daemon, no database, no web UI — just `argparse`, a state file, an `fcntl`
+lock, and `urllib`. Unlike Ollama or LM Studio, mlxer wraps the native
+`mlx_lm` server directly.
+
+**What models are supported?**
+Any MLX-compatible model. mlxer discovers models from flat directories,
+LM Studio nested layouts, and the Hugging Face hub cache. It also supports
+model aliases for custom naming.
+
+**How do I install mlxer?**
+```bash
+pipx install mlxer
+mlxer doctor
+```
+Or use the standalone binary:
+```bash
+curl -fsSL https://github.com/Pixie-sh/mlxer/releases/latest/download/install.sh | sh
+```
+
+**How do I use mlxer with OpenCode?**
+```bash
+mlxer start --model qwen3-8b-4bit
+mlxer config opencode --apply
+```
+
+**How do I use mlxer with Claude Code?**
+mlxer provides two paths: a LiteLLM proxy (recommended) or experimental
+OpenAI-compatible env vars. See the [`config claude-code`](#config-claude-code)
+section above.
+
+**What is the OpenAI-compatible endpoint?**
+mlxer wraps `mlx_lm server` which exposes an OpenAI-compatible API at
+`http://127.0.0.1:8080/v1`. Any tool that supports OpenAI-compatible
+endpoints can connect to mlxer.
+
+---
+
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "mlxer",
+  "description": "Headless CLI for managing local MLX language-model HTTP servers on Apple Silicon Macs. Supports model discovery, server lifecycle management, performance benchmarking, and provider integration with OpenCode, Claude Code, and LiteLLM.",
+  "applicationCategory": "Developer Tool",
+  "operatingSystem": "macOS (Apple Silicon)",
+  "programmingLanguage": "Python",
+  "license": "MIT",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "applicationSuite": "MLX",
+  "keywords": "local llm, mlx, mlx-lm, headless server, apple silicon, openai-compatible",
+  "releaseNotes": "https://github.com/Pixie-sh/mlxer/blob/main/CHANGELOG.md",
+  "feature": {
+    "@type": "CreativeWork",
+    "name": "Server Lifecycle",
+    "description": "Start, stop, restart, and switch MLX models with fcntl-locked atomic operations"
+  },
+  "knowsAbout": ["Large Language Models", "MLX Framework", "OpenAI Compatible API", "Local Inference"]
+}
+```
