@@ -5,7 +5,7 @@ i.e. ``python <this file> server --model ... --host ... --port ...``. The shim
 patches ``mlx_lm.server`` in memory, then hands off to ``mlx_lm.cli.main()`` so
 the server behaves identically apart from the patch.
 
-Two patches are applied:
+Four patches are applied:
 
 1. Tool-call finish_reason: when a tool call fails to parse (it gets dropped —
    typically because the model was cut off mid-call and the JSON is incomplete),
@@ -25,6 +25,16 @@ Two patches are applied:
    models accept multi-part system prompts. Lenient templates (Gemma, etc.)
    render the merged block identically, so the patch is safe for every model.
 
+3. Streaming disconnects: if a client cancels a streaming response, stock
+   ``mlx_lm`` lets ``BrokenPipeError``/connection-reset exceptions escape the
+   request thread, producing noisy traceback blocks in the server log. We treat
+   those as a normal client disconnect and suppress the traceback.
+
+4. Compatibility-probe 404 noise: OpenCode/OpenWebUI/LM Studio-style clients
+   often probe Ollama or non-OpenAI endpoints before settling on ``/v1/models``.
+   Those 404 responses are correct but noisy, so their request-log lines are
+   suppressed while unrelated 404s continue to be logged.
+
 This runs as a *script* under the server's interpreter, which need not have
 mlxer importable — only stdlib and mlx_lm. The patch is best-effort: if
 mlx_lm's internals don't match (e.g. a future version renames things), it logs a
@@ -40,6 +50,19 @@ import threading
 # one thread per request). Set when a tool call fails to parse, read when the
 # response is assembled — both happen in the same request thread.
 _state = threading.local()
+
+_COMPAT_PROBE_PATHS = {
+    "/api/show",
+    "/api/tags",
+    "/api/v1/models",
+    "/props",
+    "/v1/props",
+    "/version",
+}
+
+
+def _path_without_query(handler) -> str:
+    return str(getattr(handler, "path", "")).split("?", 1)[0]
 
 
 def _join_system_content(a, b):
@@ -102,6 +125,8 @@ def _apply_patch() -> None:
     orig_init = formatter_cls.__init__
     orig_generate_response = handler_cls.generate_response
     orig_handle_chat = handler_cls.handle_chat_completions
+    orig_handle_completion = handler_cls.handle_completion
+    orig_log_request = handler_cls.log_request
 
     def patched_init(self, *args, **kwargs):
         _state.tool_parse_failed = False
@@ -135,9 +160,30 @@ def _apply_patch() -> None:
             body["messages"] = _merge_system_messages(body["messages"])
         return orig_handle_chat(self, *args, **kwargs)
 
+    def patched_handle_completion(self, *args, **kwargs):
+        try:
+            return orig_handle_completion(self, *args, **kwargs)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+            logging.getLogger(__name__).debug(
+                "mlxer: client disconnected during response stream (%s)",
+                type(e).__name__,
+            )
+            return None
+
+    def patched_log_request(self, code="-", size="-"):
+        if str(code) == "404" and _path_without_query(self) in _COMPAT_PROBE_PATHS:
+            logging.getLogger(__name__).debug(
+                "mlxer: suppressed compatibility probe 404 for %s",
+                _path_without_query(self),
+            )
+            return None
+        return orig_log_request(self, code, size)
+
     formatter_cls.__init__ = patched_init
     handler_cls.generate_response = patched_generate_response
     handler_cls.handle_chat_completions = patched_handle_chat
+    handler_cls.handle_completion = patched_handle_completion
+    handler_cls.log_request = patched_log_request
     formatter_cls._mlxmgr_patched = True
 
 
@@ -162,7 +208,9 @@ def main(argv: list[str] | None = None) -> None:
         _announce_when_logging_ready(
             "mlxer: patches active "
             "(unparseable tool calls report finish_reason=length; "
-            "consecutive system messages merged for strict chat templates)"
+            "consecutive system messages merged for strict chat templates; "
+            "client disconnect tracebacks suppressed; "
+            "known compatibility-probe 404 logs suppressed)"
         )
     except Exception as e:  # never block startup on a patch failure
         logging.getLogger(__name__).warning(
